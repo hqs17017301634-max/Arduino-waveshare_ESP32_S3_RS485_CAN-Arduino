@@ -4,14 +4,14 @@
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
-    ESP32S3 variant 鈥?uses the built-in TWAI (CAN) peripheral instead of MCP2515.
+    ESP32S3 variant -- uses the built-in TWAI (CAN) peripheral instead of MCP2515.
 
     Two supported boards (selected via PlatformIO build_flags):
-      * Waveshare ESP32-S3-RS485-CAN 鈥?single CAN, TWAI only.
-      * LILYGO T-2CAN 鈥?dual CAN:
-          - CAN A / CAN1: ESP32-S3 native TWAI (GPIO7/GPIO6) 鈥?FSD activation and
+      * Waveshare ESP32-S3-RS485-CAN -- single CAN, TWAI only.
+      * LILYGO T-2CAN -- dual CAN:
+          - CAN A / CAN1: ESP32-S3 native TWAI (GPIO7/GPIO6) -- FSD activation and
             speed-limit modification. This is the primary, time-critical bus.
-          - CAN B / CAN2: MCP2515 over SPI (GPIO12/11/13/10/9) 鈥?second auxiliary
+          - CAN B / CAN2: MCP2515 over SPI (GPIO12/11/13/10/9) -- second auxiliary
             bus (basic RX/TX/counters + optional 0x339 service-mode burst).
 
     WiFi/Bluetooth stay powered down unless the light WebUI is compiled in
@@ -27,11 +27,11 @@
 #include <esp_heap_caps.h>
 #endif
 
-// ---- CAN B (MCP2515) 鈥?optional secondary bus ----
+// ---- CAN B (MCP2515) -- optional secondary bus ----
 // The autowp MCP2515 library provides its own `struct can_frame` with the same
 // field layout (can_id / can_dlc / data[8]) the handler already expects, so we
 // only define our own copy when the library is absent. Defining both in one
-// translation unit would be a redefinition error 鈥?hence the #else.
+// translation unit would be a redefinition error -- hence the #else.
 #ifdef ENABLE_CANB_MCP2515
 #include <SPI.h>
 #include <mcp2515.h>
@@ -43,7 +43,7 @@ struct can_frame {
 };
 #endif
 
-// ---- Light WebUI 鈥?optional ----
+// ---- Light WebUI -- optional ----
 #ifdef ENABLE_LIGHT_WEBUI
 #include <WiFi.h>
 #include <WebServer.h>
@@ -52,7 +52,7 @@ struct can_frame {
 
 // This build supports the HW3 car only.
 
-// Pin assignments 鈥?overridable via PlatformIO build_flags (-D...).
+// Pin assignments -- overridable via PlatformIO build_flags (-D...).
 // Defaults match the Waveshare ESP32-S3-RS485-CAN board.
 #ifndef TWAI_TX_PIN
 #define TWAI_TX_PIN GPIO_NUM_15
@@ -64,7 +64,7 @@ struct can_frame {
 #define PIN_LED 14
 #endif
 
-// TWAI RX/TX queue depths 鈥?overridable via build_flags.
+// TWAI RX/TX queue depths -- overridable via build_flags.
 #ifndef TWAI_RX_QUEUE_LEN
 #define TWAI_RX_QUEUE_LEN 64
 #endif
@@ -72,7 +72,7 @@ struct can_frame {
 #define TWAI_TX_QUEUE_LEN 16
 #endif
 
-// ---- CAN B (MCP2515) pin/clock fallbacks 鈥?overridable via build_flags ----
+// ---- CAN B (MCP2515) pin/clock fallbacks -- overridable via build_flags ----
 #ifdef ENABLE_CANB_MCP2515
 #ifndef MCP2515_SCK
 #define MCP2515_SCK 12
@@ -645,8 +645,7 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
   sendBatteryPreheatFrame(payload);
 }
 
-// CAN A 璋冭瘯瑕佺偣锛?// TWAI 纭欢杩囨护鍙仛鈥滅矖杩囨护鈥濓紝鍑忓皯鎬荤嚎甯ц繘鍏?RX 闃熷垪鐨勬暟閲忥紱
-// 鐪熸鍙備笌涓氬姟閫昏緫鐨勪粛鐒跺彧鍏佽 0x399銆?x3F8銆?x3FD 涓変釜 ID銆?// Hardware acceptance filter 鈥?a coarse pre-filter so the controller only
+// Hardware acceptance filter -- a coarse pre-filter so the controller only
 // enqueues the IDs near our targets instead of the whole bus; isRelevantCanId()
 // still does the exact ID match. Derived from the IDs we touch:
 //   0x145, 0x399, 0x3F8, 0x3FD.
@@ -672,7 +671,7 @@ struct SpeedLimitMonitor {
 
   void update(const can_frame& frame) {
     if (frame.can_id == CAN_ID_DAS_STATUS && frame.can_dlc >= 2) {
-    // 0x399 淇濆瓨鏈€杩戜竴娆?DAS 鐘舵€佸抚锛涢€熷害鍋忕Щ璁＄畻鍙缂撳瓨锛屼笉鍦?CAN 蹇矾寰勯噷鍋氶噸娲汇€?    if (frame.can_id == CAN_ID_DAS_STATUS && frame.can_dlc >= 2) {
+      // Cache the latest 0x399 DAS_status frame for speed-offset calculation.
       dasStatusFrame = frame;
       hasDasStatusFrame = true;
     }
@@ -681,7 +680,7 @@ struct SpeedLimitMonitor {
   bool getFusedSpeedLimitValue(int& limitValue) const {
     if (!hasDasStatusFrame || dasStatusFrame.can_dlc < 2) return false;
     const uint64_t fusedLimitRaw = (static_cast<uint64_t>(dasStatusFrame.data[1]) & 0x1F);
-    // 浣?5 bit 涓鸿瀺鍚堥檺閫熺储寮曪紝鍗曚綅 5 km/h锛? 鍜?31 瑙嗕负鏃犳晥/鏈煡銆?    const uint64_t fusedLimitRaw = (static_cast<uint64_t>(dasStatusFrame.data[1]) & 0x1F);
+    // Low 5 bits encode fused speed limit in 5 kph units; 0 and 31 are invalid.
     if (fusedLimitRaw == 0 || fusedLimitRaw == 31) return false;
     limitValue = static_cast<int>(fusedLimitRaw * 5ULL);
     return true;
@@ -717,7 +716,7 @@ inline int clampOffsetKph(int value) { return std::max(std::min(value, MAX_SPEED
 
 inline uint8_t encodeSpeedOffsetRawPct4(int offsetKph, int fusedSpeedLimitKph) {
   if (fusedSpeedLimitKph <= 0) return 0;
-  // 閫熷害鍋忕Щ鍦?CAN 绾夸笂鎸?PCT4 缂栫爜锛?% = 4 raw銆?  if (fusedSpeedLimitKph <= 0) return 0;
+  // PCT4 wire encoding: 1 percent = 4 raw units.
   int pct = (offsetKph * 100 + fusedSpeedLimitKph / 2) / fusedSpeedLimitKph;
   pct = std::max(std::min(pct, MAX_SPEED_OFFSET_PCT), 0);
   return static_cast<uint8_t>(pct * OFFSET_PCT4_RAW_PER_PCT);
@@ -740,7 +739,7 @@ inline uint8_t readSpeedOffsetRaw(const can_frame& frame) {
 
 inline void writeSpeedOffsetRaw(can_frame& frame, uint8_t raw) {
   frame.data[0] = static_cast<uint8_t>((frame.data[0] & ~0xC0) | ((raw & 0x03) << 6));
-  // 0x3FD mux 2 鐨?offset raw 璺?data[0] bit6-7 鍜?data[1] bit0-5銆?  frame.data[0] = static_cast<uint8_t>((frame.data[0] & ~0xC0) | ((raw & 0x03) << 6));
+  // 0x3FD mux 2 stores offset raw in data[0] bits 6-7 and data[1] bits 0-5.
   frame.data[1] = static_cast<uint8_t>((frame.data[1] & ~0x3F) | (raw >> 2));
 }
 
@@ -753,9 +752,8 @@ struct OffsetSlewLimiter {
     const uint32_t now = millis();
 
     if (targetRaw < lastRaw && lastSentMs != 0) {
+      // Only limit downward offset changes; upward changes pass immediately.
       const uint32_t rateRawPerSec =
-        static_cast<uint32_t>(slewPctPerSec) * OFFSET_PCT4_RAW_PER_PCT;
-      // 鍙檺鍒垛€滀笅闄嶉€熷害鈥濓細闄愰€熺獊鐒堕檷浣庢椂骞虫粦鍥炶惤锛岄伩鍏嶇洰鏍囬€熷害鐬棿璺冲彉銆?      const uint32_t rateRawPerSec =
         static_cast<uint32_t>(slewPctPerSec) * OFFSET_PCT4_RAW_PER_PCT;
       const uint32_t elapsedMs = now - lastSentMs;
       const uint32_t maxDrop = (rateRawPerSec * elapsedMs + 500U) / 1000U;
@@ -778,7 +776,7 @@ struct HW3Handler {
 
   void refreshUnifiedSpeedCompensation(const RuntimeConfig& cfg) {
     unifiedSpeedCompensation.hasFusedSpeedLimit = false;
-    // 姣忚疆鏀跺埌鐩稿叧 CAN A 甯у悗鍒锋柊涓€娆＄紦瀛樼姸鎬侊紝鍚庣画 mux 2 鐩存帴鍐欏叆璁＄畻濂界殑 offset銆?    unifiedSpeedCompensation.hasFusedSpeedLimit = false;
+    // Refresh once per relevant CAN A frame; mux 2 then writes the cached offset.
     unifiedSpeedCompensation.fusedSpeedLimitKph = 0;
     unifiedSpeedCompensation.targetSpeedKph = 0;
     unifiedSpeedCompensation.offsetKph = 0;
@@ -792,7 +790,7 @@ struct HW3Handler {
         int desiredOffsetKph = unifiedSpeedCompensation.targetSpeedKph > fusedSpeedLimitValue
           ? (unifiedSpeedCompensation.targetSpeedKph - fusedSpeedLimitValue)
           : 0;
-        // 鐩爣閫熷害琛ㄧ敱 WebUI 閰嶇疆锛涙渶缁?offset 浠嶅彈 MAX_SPEED_OFFSET_KPH/PCT 涓婇檺淇濇姢銆?        int desiredOffsetKph = unifiedSpeedCompensation.targetSpeedKph > fusedSpeedLimitValue
+        // WebUI target speed is still protected by kph and percentage caps.
         unifiedSpeedCompensation.offsetKph = clampOffsetKph(desiredOffsetKph);
         unifiedSpeedCompensation.speedOffsetRaw =
           fusedSpeedLimitValue < LOW_SPEED_MAX_PCT_LIMIT_KPH
@@ -820,7 +818,7 @@ struct HW3Handler {
     if (frame.can_id == CAN_ID_FOLLOW_DISTANCE) {
       if (frame.can_dlc < 6) return;
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
-      // 0x3F8 璺熻溅璺濈鎷ㄦ潌澶嶇敤涓洪┚椹堕鏍硷細鏁板€艰秺灏忚秺婵€杩涖€?      uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
+      // Reuse the 0x3F8 follow-distance setting as the driving style selector.
       switch (followDistance) {
         case 1: speedProfile = 2; break;
         case 2: speedProfile = 1; break;
@@ -833,20 +831,20 @@ struct HW3Handler {
       auto index = readMuxID(frame);
       if (index == 0 && cfg.fsdEnabled) {
         setBit(frame, 46, true);
-        // 0x3FD mux 0锛氬紑鍚?FSD/AP 鐩稿叧 bit锛屽苟鍐欏叆褰撳墠椹鹃┒椋庢牸銆?        setBit(frame, 46, true);
+        // 0x3FD mux 0 enables the FSD/AP bit and writes the current drive style.
         setSpeedProfileV12V13(frame, speedProfile);
         twai_send(frame);
       }
       if (index == 1) {
         setBit(frame, 19, false);
-        // 0x3FD mux 1锛氭竻 bit 19锛屾部鐢ㄥ師鍒嗘敮鐨?AP/FSD 婵€娲昏緟鍔╅€昏緫銆?        setBit(frame, 19, false);
+        // 0x3FD mux 1 keeps bit 19 clear for the AP/FSD activation assist path.
         twai_send(frame);
       }
       if (index == 2 && cfg.fsdEnabled) {
         uint8_t speedOffsetRaw = unifiedSpeedCompensation.hasFusedSpeedLimit
           ? unifiedSpeedCompensation.speedOffsetRaw
           : readSpeedOffsetRaw(frame);
-        // 0x3FD mux 2锛氬啓鍏ラ€熷害鍋忕Щ銆傝嫢娌℃湁鏈夋晥闄愰€燂紝鍒欎繚鐣欏師杞﹀綋鍓?offset銆?        uint8_t speedOffsetRaw = unifiedSpeedCompensation.hasFusedSpeedLimit
+        // 0x3FD mux 2 writes speed offset, or preserves stock offset if no valid limit.
         speedOffsetRaw = offsetSlewLimiter.apply(speedOffsetRaw, cfg.slewPctPerSec);
         g_status.offsetRaw = speedOffsetRaw;
         writeSpeedOffsetRaw(frame, speedOffsetRaw);
@@ -859,7 +857,7 @@ struct HW3Handler {
 HW3Handler handler;
 
 // ============================================================================
-// CAN B (MCP2515) secondary bus 鈥?basic comms + non-blocking service-mode burst
+// CAN B (MCP2515) secondary bus -- basic comms + non-blocking service-mode burst
 // ============================================================================
 #ifdef ENABLE_CANB_MCP2515
 
@@ -873,7 +871,7 @@ static uint32_t canbLastId = 0;
 static uint32_t canbRxOverflowCount = 0;
 
 // 0x339 VCSEC service-mode burst state (RAM-only, OFF on boot). Each toggle
-// queues 4 frames at 10ms spacing, scheduled with millis() 鈥?never delay().
+// queues 4 frames at 10ms spacing, scheduled with millis() -- never delay().
 // volatile: setCanBServiceMode() may run on the WebUI task (core 0) while
 // serviceCanBScheduledTx() runs on the CAN loop (core 1).
 static volatile bool canbServiceModeActive = false;
@@ -918,7 +916,7 @@ constexpr uint16_t SCROLL_GEAR_BRAKE_HOLD_MS = 150;
 constexpr uint16_t SCROLL_GEAR_FRAME_INTERVAL_MS = 50;  // ~20Hz, matches/dominates real 0x229 (10Hz)
 constexpr uint16_t SCROLL_GEAR_IDLE_FRAMES = 3;
 constexpr uint16_t SCROLL_GEAR_STATUS_FRAMES = 6;        // sustain detent longer (manual D=5,R=~7 frames)
-constexpr uint16_t SCROLL_GEAR_COOLDOWN_MS = 400;  // 连续 R<->D 更跟手(单次换挡本身仅~0.1-0.3s)
+constexpr uint16_t SCROLL_GEAR_COOLDOWN_MS = 400;  // responsive R<->D; one shift takes ~0.1-0.3s
 constexpr float SCROLL_GEAR_MAX_SPEED_KPH = 2.0f;
 constexpr float REAR_FOG_MILD_DECEL_THRESHOLD = -0.80f;
 constexpr float REAR_FOG_HARD_DECEL_THRESHOLD = -2.50f;
@@ -1007,7 +1005,7 @@ static volatile uint32_t scrollGearCooldownUntilMs = 0;
 static volatile bool scrollGearLatched = false;
 static volatile uint8_t scrollGearLastBlocked = 0;
 
-// CAN B read budget per loop pass 鈥?bounded so it can never starve CAN A.
+// CAN B read budget per loop pass -- bounded so it can never starve CAN A.
 constexpr uint8_t CANB_RX_SCAN_LIMIT = 4;
 constexpr uint8_t CANB_RX_SCAN_LIMIT_ACTIVE = 24;
 constexpr uint32_t CANB_RX_DRAIN_TIME_US = 900;
@@ -1058,7 +1056,7 @@ static bool applyCanBFilters(uint8_t mode) {
   if (mode > CANB_FILTER_MINIMUM) mode = CANB_FILTER_ALL;
   if (mode == CANB_FILTER_FEATURE) {
     if (canb.setFilterMask(MCP2515::MASK0, false, 0x7FF) != MCP2515::ERROR_OK) return false;
-    // WebUI 寮€鍚繃婊わ細MCP2515 鍙帴鏀跺綋鍓嶅姛鑳界浉鍏虫爣鍑嗗抚锛岄檷浣?CAN B 澶勭悊鍘嬪姏銆?    if (canb.setFilterMask(MCP2515::MASK0, false, 0x7FF) != MCP2515::ERROR_OK) return false;
+    // Feature filter mode keeps MCP2515 RX focused on IDs used by enabled features.
     if (canb.setFilter(MCP2515::RXF0, false, CANB_ID_STW_ACTN_RQ) != MCP2515::ERROR_OK) return false;
     if (canb.setFilter(MCP2515::RXF1, false, CANB_ID_BODY_LIGHTING) != MCP2515::ERROR_OK) return false;
 
@@ -1079,7 +1077,7 @@ static bool applyCanBFilters(uint8_t mode) {
     if (canb.setFilter(MCP2515::RXF5, false, CANB_ID_VCSEC_STATUS) != MCP2515::ERROR_OK) return false;
   } else {
     if (canb.setFilterMask(MCP2515::MASK0, false, 0x000) != MCP2515::ERROR_OK) return false;
-    // WebUI 鍏抽棴杩囨护锛歮ask=0 鎺ユ敹鍏ㄩ儴鏍囧噯甯э紝鏂逛究瀹炶溅鎶撳寘/璋冭瘯鏂?ID銆?    if (canb.setFilterMask(MCP2515::MASK0, false, 0x000) != MCP2515::ERROR_OK) return false;
+    // All-pass mode is useful for capture and unknown-ID debugging.
     if (canb.setFilter(MCP2515::RXF0, false, 0x000) != MCP2515::ERROR_OK) return false;
     if (canb.setFilter(MCP2515::RXF1, false, 0x000) != MCP2515::ERROR_OK) return false;
 
@@ -1665,7 +1663,7 @@ static void serviceReverseStrobe(const RuntimeConfig& cfg) {
 
 static void serviceRearFogBrakeStrobe(const RuntimeConfig& cfg) {
   if (!canbReady) return;
-  // 0x273 鍚庨浘鐏垎闂細韪╁埞杞﹀彧璐熻矗瑙﹀彂锛屽疄闄呰緭鍑哄浐瀹?6 涓?ON/OFF 鑴夊啿銆?  if (!canbReady) return;
+  // 0x273 rear fog brake strobe output is a fixed non-blocking ON/OFF pulse train.
   if (!cfg.canbEnabled) {
     if (rearFogBrakeStrobeActive || rearFogBrakeStrobeOutputOn) stopRearFogBrakeStrobe(false);
     return;
@@ -1940,7 +1938,7 @@ static void handleCanBFrame(const can_frame& frame) {
 
   if (frame.can_id == CANB_ID_BODY_LIGHTING && frame.can_dlc >= 8) {
     canbLastBodyLightingFrame = frame;
-    // 0x273 璺緞锛氬彧鐢?data[7] bit0 鐨勫埞杞︿笂鍗囨部瑙﹀彂锛屼笉鍦ㄨ繖閲岀洿鎺ュ彂閫併€?    canbLastBodyLightingFrame = frame;
+    // 0x273 uses data[7] bit0 as the brake-lamp source for rear fog strobe.
     canbHasLastBodyLightingFrame = true;
 
     const RuntimeConfig cfg = configSnapshot();
@@ -1957,48 +1955,6 @@ static void handleCanBFrame(const can_frame& frame) {
   if (frame.can_id == CANB_ID_VCLEFT_SWITCH && frame.can_dlc >= 4) {
     handleVcleftSwitchFrame(frame, configSnapshot(), true);
     return;
-    canbLastVcleftSwitchFrame = frame;
-    canbHasLastVcleftSwitchFrame = true;
-    const uint8_t mux = static_cast<uint8_t>(frame.data[0] & VCLEFT_MUX_MASK);
-
-    // mux0 carries the hazard button + valid counter/CRC bytes; cache it so the
-    // injected hazard frame rides a real recent counter/CRC.
-    if (mux == VCLEFT_MUX_HAZARD) {
-      canbLastVcleftMux0Frame = frame;
-      canbHasLastVcleftMux0Frame = true;
-    }
-
-    // rightScrollTicks lives ONLY in mux1 (data[3], 6-bit signed, idle 0). Other
-    // muxes use data[3] as 0x55 filler — reading it there gave a phantom +21
-    // scroll that cancelled the reverse strobe while braking. Gate on the mux.
-    if (mux == VCLEFT_MUX_SCROLL) {
-      const uint8_t scrollRaw = static_cast<uint8_t>(frame.data[3] & 0x3F);
-      const int8_t scrollTicks = (scrollRaw & 0x20)
-        ? static_cast<int8_t>(static_cast<int>(scrollRaw) - 64)
-        : static_cast<int8_t>(scrollRaw);
-      g_status.rightScrollTicks = scrollTicks;
-
-      // Brake + right-scroll as a gear-intent trigger source. Dry-run is always
-      // status-only; experimental injection sends bus2 0x229 only when the WebUI
-      // injection switch and all safety gates are true.
-      const RuntimeConfig cfg = configSnapshot();
-      const bool scrollEdge = (scrollTicks != 0) && !scrollGearLatched;
-      if (scrollTicks == 0) {
-        scrollGearLatched = false;
-      } else if (scrollEdge && g_brakePedalActive) {
-        const uint8_t targetGear = (scrollTicks < 0) ? GEAR_R : GEAR_D;
-        requestScrollGearShift(targetGear, cfg);
-      }
-
-      if (cfg.reverseStrobeEnabled && g_brakePedalActive && scrollEdge) {
-        if (scrollTicks < 0) {
-          if (!reverseStrobeActive) startReverseStrobe();
-        } else if (reverseStrobeActive) {
-          stopReverseStrobe(true);
-        }
-      }
-      if (scrollTicks != 0) scrollGearLatched = true;
-    }
   }
 }
 
@@ -2052,7 +2008,7 @@ static void serviceCanBScheduledTx() {
 #endif  // ENABLE_CANB_MCP2515
 
 // ============================================================================
-// Light WebUI 鈥?optional SoftAP parameter page on a dedicated low-prio task
+// Light WebUI -- optional SoftAP parameter page on a dedicated low-prio task
 // ============================================================================
 #ifdef ENABLE_LIGHT_WEBUI
 
@@ -2073,7 +2029,7 @@ static void saveConfigToPrefs();
 static void setupLightWebUi();
 static void webTask(void*);
 
-#include "web_ui_page.h"  // kIndexHtml 鈥?kept out of the .ino prototype scanner
+#include "web_ui_page.h"  // kIndexHtml -- kept out of the .ino prototype scanner
 
 static void handleRoot() {
   server.send_P(200, "text/html", kIndexHtml);
@@ -2201,7 +2157,7 @@ static bool argBool(const char* name, bool fallback) {
   return v == "1" || v == "true" || v == "on";
 }
 
-// POST /config 鈥?update the live config in RAM only (no Flash write here).
+// POST /config -- update the live config in RAM only (no Flash write here).
 static void handleConfig() {
   RuntimeConfig c = configSnapshot();
   const uint8_t oldCanBFilterMode = c.canbFilterMode;
@@ -2263,13 +2219,13 @@ static void handleConfig() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-// POST /save 鈥?persist the current RAM config to Flash (Preferences).
+// POST /save -- persist the current RAM config to Flash (Preferences).
 static void handleSave() {
   saveConfigToPrefs();
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-// POST /web/off 鈥?acknowledge, then shut the WebUI down asynchronously in the
+// POST /web/off -- acknowledge, then shut the WebUI down asynchronously in the
 // web task so this handler never blocks. CAN is unaffected.
 static void handleWebOff() {
   server.send(200, "application/json", "{\"ok\":true}");
