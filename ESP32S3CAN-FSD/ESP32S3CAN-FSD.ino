@@ -212,6 +212,7 @@ struct RuntimeStatus {
   uint8_t rightStalkStatus = 0;
   uint8_t rightStalkCounter = 0;
   uint8_t currentGear = 0;
+  uint8_t dasAutopilotState = 15;    // 0/1/2 allow normal driving; 3..6 active AP/FSD
   uint8_t brakeActive = 0;
   int8_t scrollGearIntent = 0;       // -1=R, 0=none, 1=D
   uint8_t scrollGearDryRun = 0;
@@ -223,7 +224,7 @@ struct RuntimeStatus {
   uint8_t lockSleepArmed = 0;
   uint8_t lockSleepTriggered = 0;
   uint32_t lockSleepLastId = 0;
-  uint8_t lockSleepSource = 0; // 1=0x273 UI request, 2=0x339 VCSEC
+  uint8_t lockSleepSource = 0; // 1=0x273 UI lock request
   uint32_t lockSleepAgeMs = 0;
 
   int fusedLimitKph = 0;
@@ -670,10 +671,11 @@ struct SpeedLimitMonitor {
   bool hasDasStatusFrame = false;
 
   void update(const can_frame& frame) {
-    if (frame.can_id == CAN_ID_DAS_STATUS && frame.can_dlc >= 2) {
-      // Cache the latest 0x399 DAS_status frame for speed-offset calculation.
+    if (frame.can_id == CAN_ID_DAS_STATUS && frame.can_dlc >= 1) {
+      // Cache the latest 0x399 DAS_status frame for speed/AP state checks.
       dasStatusFrame = frame;
       hasDasStatusFrame = true;
+      g_status.dasAutopilotState = static_cast<uint8_t>(frame.data[0] & 0x0F);
     }
   }
 
@@ -683,6 +685,12 @@ struct SpeedLimitMonitor {
     // Low 5 bits encode fused speed limit in 5 kph units; 0 and 31 are invalid.
     if (fusedLimitRaw == 0 || fusedLimitRaw == 31) return false;
     limitValue = static_cast<int>(fusedLimitRaw * 5ULL);
+    return true;
+  }
+
+  bool getAutopilotState(uint8_t& state) const {
+    if (!hasDasStatusFrame || dasStatusFrame.can_dlc < 1) return false;
+    state = static_cast<uint8_t>(dasStatusFrame.data[0] & 0x0F);
     return true;
   }
 };
@@ -933,6 +941,9 @@ constexpr uint8_t RIGHT_STALK_D_STAGE1 = 3;
 constexpr uint8_t RIGHT_STALK_D_STAGE2 = 4;
 constexpr uint8_t GEAR_R = 2;
 constexpr uint8_t GEAR_D = 4;
+constexpr uint8_t DAS_AP_STATE_DISABLED = 0;
+constexpr uint8_t DAS_AP_STATE_UNAVAILABLE = 1;
+constexpr uint8_t DAS_AP_STATE_AVAILABLE = 2;
 constexpr uint8_t VCLEFT_HAZARD_BUTTON_MASK = 0x08;  // 0x3C2 byte0 bit3
 // 0x3C2 is multiplexed by byte0 bits0..1. Capture: mux0 carries hazardButton +
 // counter/CRC (data[3] is 0x55 filler); mux1 carries rightScrollTicks in data[3]
@@ -1200,10 +1211,23 @@ static can_frame rightStalkFrame(uint8_t status) {
   return f;
 }
 
-static bool scrollGearSafetyOk(uint8_t targetGear) {
+static bool scrollGearFsdStateOk(const RuntimeConfig& cfg) {
+  if (!cfg.fsdEnabled) return true;
+  uint8_t apState = 15;
+  if (!speedLimitMonitor.getAutopilotState(apState)) return false;
+  return apState == DAS_AP_STATE_DISABLED ||
+         apState == DAS_AP_STATE_UNAVAILABLE ||
+         apState == DAS_AP_STATE_AVAILABLE;
+}
+
+static bool scrollGearSafetyOk(uint8_t targetGear, const RuntimeConfig& cfg) {
   const uint32_t now = millis();
   if (targetGear != GEAR_D && targetGear != GEAR_R) {
     scrollGearLastBlocked = 1;
+    return false;
+  }
+  if (!scrollGearFsdStateOk(cfg)) {
+    scrollGearLastBlocked = 6;
     return false;
   }
   if (!g_brakePedalActive || g_brakePedalActiveSinceMs == 0 ||
@@ -1236,7 +1260,7 @@ static void requestScrollGearShift(uint8_t targetGear, const RuntimeConfig& cfg)
 
   if (!cfg.scrollGearInjectEnabled) return;
   if (scrollGearShiftActive) return;
-  if (!scrollGearSafetyOk(targetGear)) {
+  if (!scrollGearSafetyOk(targetGear, cfg)) {
     g_status.scrollGearInjectBlocked = scrollGearLastBlocked;
     return;
   }
@@ -1255,7 +1279,7 @@ static void serviceScrollGearShift(const RuntimeConfig& cfg) {
     return;
   }
   if (!canbReady || !cfg.canbEnabled || !cfg.scrollGearInjectEnabled ||
-      !scrollGearSafetyOk(scrollGearTargetGear)) {
+      !scrollGearSafetyOk(scrollGearTargetGear, cfg)) {
     canb_send(rightStalkFrame(RIGHT_STALK_IDLE));
     scrollGearShiftActive = false;
     scrollGearCooldownUntilMs = millis() + SCROLL_GEAR_COOLDOWN_MS;
@@ -1443,11 +1467,6 @@ static bool readSignedBitsLE(const can_frame& frame, uint8_t startBit, uint8_t l
   return true;
 }
 
-static bool lockSleepVcsecStatusLocked(uint8_t status) {
-  return status == 2 || status == 5 || status == 8 ||
-         status == 10 || status == 12 || status == 15;
-}
-
 static bool isVehicleLockSignal(const can_frame& frame, uint8_t& source) {
   uint32_t raw = 0;
   if (frame.can_id == CANB_ID_BODY_LIGHTING && frame.can_dlc >= 3) {
@@ -1455,15 +1474,6 @@ static bool isVehicleLockSignal(const can_frame& frame, uint8_t& source) {
     const uint8_t lockRequest = static_cast<uint8_t>(raw);
     if (lockRequest == 1 || lockRequest == 4) {
       source = 1;
-      return true;
-    }
-  } else if (frame.can_id == CANB_ID_VCSEC_STATUS && frame.can_dlc >= 8) {
-    uint32_t vehicleLockStatus = 0;
-    uint32_t simpleLockStatus = 0;
-    if (!readBitsLE(frame, 12, 4, vehicleLockStatus)) return false;
-    if (!readBitsLE(frame, 54, 2, simpleLockStatus)) return false;
-    if (simpleLockStatus == 2 || lockSleepVcsecStatusLocked(static_cast<uint8_t>(vehicleLockStatus))) {
-      source = 2;
       return true;
     }
   }
@@ -2126,6 +2136,7 @@ static void handleStatus() {
   j += ",\"rightStalkStatus\":";     j += s.rightStalkStatus;
   j += ",\"rightStalkCounter\":";    j += s.rightStalkCounter;
   j += ",\"currentGear\":";          j += s.currentGear;
+  j += ",\"dasAutopilotState\":";    j += s.dasAutopilotState;
   j += ",\"brakeActive\":";          j += s.brakeActive;
   j += ",\"scrollGearIntent\":";     j += s.scrollGearIntent;
   j += ",\"scrollGearDryRun\":";     j += s.scrollGearDryRun;

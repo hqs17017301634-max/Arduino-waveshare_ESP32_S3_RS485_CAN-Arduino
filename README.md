@@ -118,7 +118,7 @@ Secondary bus: `bus=2` / MCP2515 / physical CANA.
   - `0`: receive all standard frames for debugging.
   - `1`: feature IDs.
   - `2`: minimum runtime IDs.
-- Feature/minimum filters include `0x082` and `0x339` so battery-preheat monitoring and VCSEC lock-status detection are not lost.
+- Feature/minimum filters include `0x082` and `0x339` so battery-preheat monitoring and VCSEC service/status frames are not lost.
 
 Implemented `bus=2` features:
 
@@ -126,9 +126,9 @@ Implemented `bus=2` features:
 - **Flash-to-pass strobe (`0x249`)**: when armed, two pull events within 1.2 s trigger 8 PULL/idle pulses. Default cadence is 75 ms ON / 75 ms OFF.
 - **Rear-fog deceleration strobe (`0x273`)**: when armed, mild deceleration triggers 3 pulses and hard deceleration triggers 5 pulses. Cadence is 500 ms.
 - **Reverse hazard + rear-fog strobe**: when armed, reverse gear on `bus=1` `0x118`, or brake + right-scroll back on `bus=2` `0x3C2`, triggers hazard and rear-fog pulses.
-- **Scroll gear injection (`0x229`)**: experimental, default off. With brake pressed, right-scroll back requests R and right-scroll forward requests D.
+- **Scroll gear injection (`0x229`)**: experimental, default off. With brake pressed, right-scroll back requests R and right-scroll forward requests D. Injection is allowed only when FSD injection is disabled, or when the latest `0x399 DAS_autopilotState` is normal/non-active (`0=DISABLED`, `1=UNAVAILABLE`, or `2=AVAILABLE`); active AP/FSD states block injection.
 - **Battery preheat (`0x082`)**: when enabled, sends dynamic `UI_tripPlanning` on `bus=2` every 200 ms.
-- **Lock-triggered deep sleep**: when enabled, detects validated lock signals on `0x273` or `0x339`, inhibits all CAN TX, shuts down WiFi/TWAI, and enters ESP32 deep sleep.
+- **Lock-triggered deep sleep**: when enabled, detects only `0x273 UI_lockRequest = LOCK/REMOTE_LOCK`, inhibits all CAN TX, shuts down WiFi/TWAI, and enters ESP32 deep sleep. `0x339` no longer triggers sleep by itself.
 
 ### Battery Preheat Details
 
@@ -155,7 +155,8 @@ Set MCP2515 hardware filter to receive-all when testing BMS temperature diagnost
 When enabled from WebUI, lock sleep only references `bus=2` / MCP2515 / physical CANA:
 
 - `0x273` lock request values `1` or `4`.
-- `0x339` VCSEC lock status.
+
+`0x339` VCSEC authentication/status remains available for service/status handling, but it is not a standalone sleep trigger.
 
 On a validated lock signal:
 
@@ -351,7 +352,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
   - `0`：接收全部标准帧，用于调试。
   - `1`：功能相关 ID。
   - `2`：最小运行 ID。
-- 功能/最小过滤包含 `0x082` 和 `0x339`，避免漏掉电池预热监控和 VCSEC 锁车状态。
+- 功能/最小过滤包含 `0x082` 和 `0x339`，避免漏掉电池预热监控和 VCSEC 维修/状态帧。
 
 已实现的 `bus=2` 功能：
 
@@ -359,9 +360,9 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 - **超车灯爆闪（`0x249`）**：启用后，1.2 秒内两次 PULL 触发 8 次 PULL/idle 脉冲，默认 75 ms 开 / 75 ms 关。
 - **后雾灯减速爆闪（`0x273`）**：启用后，缓减速触发 3 次，急减速触发 5 次，节奏 500 ms。
 - **倒车双闪 + 后雾灯爆闪**：启用后，`bus=1` `0x118` 倒挡，或刹车 + `bus=2` `0x3C2` 右滚轮向后，触发双闪和后雾灯脉冲。
-- **滚轮换挡注入（`0x229`）**：实验功能，默认关闭。踩刹车时，右滚轮向后请求 R，向前请求 D。
+- **滚轮换挡注入（`0x229`）**：实验功能，默认关闭。踩刹车时，右滚轮向后请求 R，向前请求 D。只有 FSD 注入关闭，或最新 `0x399 DAS_autopilotState` 处于正常/非接管状态（`0=DISABLED`、`1=UNAVAILABLE`、`2=AVAILABLE`）时才允许注入；AP/FSD active 状态会阻止注入。
 - **电池预热（`0x082`）**：启用后，每 200 ms 在 `bus=2` 发送动态 `UI_tripPlanning`。
-- **锁车触发 deep sleep**：启用后，识别 `0x273` 或 `0x339` 的有效锁车信号，禁止所有 CAN TX、关闭 WiFi/TWAI，并进入 ESP32 deep sleep。
+- **锁车触发 deep sleep**：启用后，只识别 `0x273 UI_lockRequest = LOCK/REMOTE_LOCK`，禁止所有 CAN TX、关闭 WiFi/TWAI，并进入 ESP32 deep sleep。`0x339` 不再单独触发休眠。
 
 ### 电池预热细节
 
@@ -388,7 +389,8 @@ WebUI 诊断会解码：
 WebUI 启用后，锁车休眠只参考 `bus=2` / MCP2515 / 物理 CANA：
 
 - `0x273` lock request 值 `1` 或 `4`。
-- `0x339` VCSEC lock status。
+
+`0x339` VCSEC authentication/status 仍可用于维修/状态处理，但不再作为单独休眠触发源。
 
 识别到有效锁车信号后：
 
