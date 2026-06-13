@@ -64,6 +64,8 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <p class="hint">踩刹车 + 右滚轮，bus=2/MCP2515/物理CANA 发送 0x229，默认关闭。</p>
 <label>电池预热启用<input type="checkbox" id="batteryPreheatEnabled"></label>
 <p class="hint">当前固件：bus=2/MCP2515/物理CANA 每 200ms 发送动态 0x082；复用最新有效原车背景字段，只覆盖预热请求位。BMS 温度帧诊断需要硬件过滤设为“接收全部”。</p>
+<label>导航预热帧组仿制 EXP<input type="checkbox" id="batteryPreheatReplayEnabled"></label>
+<p class="hint">实验：bus=2/MCP2515 发送 0x082/0x08B/0x495/0x496/0x497；开启时固件会强制 MCP2515 接收全部，以便缓存真实导航伴随帧。</p>
 <label>锁车深度休眠<input type="checkbox" id="lockDeepSleepEnabled"></label>
 <p class="hint">开启后，bus=2/MCP2515/物理CANA 仅识别 0x273 UI_lockRequest=LOCK/REMOTE_LOCK，即停止所有 CAN 发送并进入 ESP32 deep sleep；0x339 只保留为维修/状态相关帧，不再单独触发休眠。</p>
 <label>bus=1/TWAI/物理CANB 只收不发<input type="checkbox" id="can1ReceiveOnly"></label>
@@ -117,11 +119,20 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>导航超充/快充类型/行程</span><span><b id="batteryPreheatUiNavToSupercharger">-</b> / <b id="batteryPreheatUiFastChargerType">-</b> / <b id="batteryPreheatUiTripActive">-</b></span></div>
 <div class="kv"><span>功率/目标温度/目的地温度</span><span><b id="batteryPreheatUiPowerW">-</b> / <b id="batteryPreheatUiTargetCx100">-</b> / <b id="batteryPreheatUiAmbientCx100">-</b></span></div>
 <div class="kv"><span>充电目标/到达能量</span><span><b id="batteryPreheatUiChargeTargetCx10">-</b> / <b id="batteryPreheatUiEnergyAtDestination">-</b></span></div>
+<div class="kv"><span>预热帧组仿制 / 缓存mask</span><span><b id="batteryPreheatReplayActive">-</b> / <b id="batteryPreheatReplayCachedMask">-</b></span></div>
+<div class="kv"><span>预热帧组TX / 距今ms</span><span><b id="batteryPreheatReplayTxCount">-</b> / <b id="batteryPreheatReplayAgeMs">-</b></span></div>
 <div class="kv"><span>BMS温度帧 / bus / 距今ms</span><span><b id="bmsTempFrameSeen">-</b> / <b id="bmsTempFrameBus">-</b> / <b id="bmsTempFrameAgeMs">-</b></span></div>
 <div class="kv"><span>BMS温度ID / mux / raw</span><span><b id="bmsTempFrameId">-</b> / <b id="bmsTempFrameMux">-</b> / <b id="bmsTempFramePayload">-</b></span></div>
 <div class="kv"><span>0x712温度原始组</span><span id="bms712Raw">-</span></div>
 <div class="kv"><span>锁车休眠 / 来源 / 距今ms</span><span><b id="lockSleepTriggered">-</b> / <b id="lockSleepSource">-</b> / <b id="lockSleepAgeMs">-</b></span></div>
 <div class="kv"><span>锁车休眠最后ID / 已启用</span><span><b id="lockSleepLastId">-</b> / <b id="lockSleepArmed">-</b></span></div>
+<div class="kv"><span>0x273 UI锁车请求 / 命中</span><span><b id="lockSleep273Request">-</b> / <b id="lockSleep273Matched">-</b></span></div>
+<div class="kv"><span>0x273 收到 / 距今ms / raw</span><span><b id="lockSleep273Seen">-</b> / <b id="lockSleep273AgeMs">-</b> / <b id="lockSleep273Payload">-</b></span></div>
+<div class="kv"><span>0x339 VCSEC简化锁状态</span><span><b id="lockSleep339SimpleStatus">-</b></span></div>
+<div class="kv"><span>0x339 VCSEC车辆锁状态</span><span><b id="lockSleep339VehicleStatus">-</b></span></div>
+<div class="kv"><span>0x339 收到 / 距今ms / raw</span><span><b id="lockSleep339Seen">-</b> / <b id="lockSleep339AgeMs">-</b> / <b id="lockSleep339Payload">-</b></span></div>
+<div class="kv"><span>0x3F5 灯光锁车反馈</span><span><b id="lockSleep3F5HazardRequest">-</b></span></div>
+<div class="kv"><span>0x3F5 收到 / 距今ms / raw</span><span><b id="lockSleep3F5Seen">-</b> / <b id="lockSleep3F5AgeMs">-</b> / <b id="lockSleep3F5Payload">-</b></span></div>
 <h3>滚轮换挡</h3>
 <div class="kv"><span>当前挡位 0x118</span><span id="currentGear">-</span></div>
 <div class="kv"><span>DAS AP state 0x399</span><span id="dasAutopilotState">-</span></div>
@@ -136,12 +147,30 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 
 <script>
 let pollTimer=null,recTimer=null,loaded=false;
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
-const stats=["can1Rx","can1Tx","can1TxFail","twaiState","twaiBusOffCount","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","batteryPreheatActive","batteryPreheatVehicleSeen","batteryPreheatVehicleAgeMs","batteryPreheatTemplateValid","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","batteryPreheatReplayEnabled","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
+const stats=["can1Rx","can1Tx","can1TxFail","twaiState","twaiBusOffCount","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","batteryPreheatActive","batteryPreheatVehicleSeen","batteryPreheatVehicleAgeMs","batteryPreheatTemplateValid","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatReplayActive","batteryPreheatReplayCachedMask","batteryPreheatReplayTxCount","batteryPreheatReplayAgeMs","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep273Seen","lockSleep273Request","lockSleep273Matched","lockSleep273AgeMs","lockSleep273Payload","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339VehicleStatus","lockSleep339AgeMs","lockSleep339Payload","lockSleep3F5Seen","lockSleep3F5HazardRequest","lockSleep3F5AgeMs","lockSleep3F5Payload","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else e.value=v;}
 function getVal(e){return e.type==="checkbox"?(e.checked?1:0):e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
-function fmtStat(k,v){if(k==="canbLastId"||k==="canbErrorFlags"||k==="bmsTempFrameId"||k==="lockSleepLastId")return "0x"+(v>>>0).toString(16).toUpperCase();if(k==="lockSleepSource")return v===1?"0x273":v;if(k==="batteryPreheatUiPowerW")return v===-32768?"SNA":(v+" W");if(k==="batteryPreheatUiTargetCx100"||k==="batteryPreheatUiAmbientCx100")return v===-32768?"SNA":((v/100).toFixed(2)+" C");if(k==="batteryPreheatUiChargeTargetCx10")return v===-32768?"SNA":((v/10).toFixed(1)+" %");if(k==="batteryPreheatUiEnergyAtDestination")return v===-32768?"SNA":v;if(k==="batteryPreheatUiState")return ["被动加热","主动加热","被动冷却","主动冷却"][v]||v;if(k==="batteryPreheatUiFastChargerType")return ["无","低功率","V2","V3","V4"][v]||v;if(k==="dasAutopilotState")return ["DISABLED","UNAVAILABLE","AVAILABLE","ACTIVE_NOMINAL","ACTIVE_RESTRICTED","ACTIVE_NAV","ACTIVE_FSD"][v]||v;if(k==="scrollGearInjectBlocked")return ["ok","bad_target","brake","speed","same_gear","cooldown","ap_state"][v]||v;return v}
+function fmtStat(k,v){
+if(k==="canbLastId"||k==="canbErrorFlags"||k==="bmsTempFrameId"||k==="lockSleepLastId")return "0x"+(v>>>0).toString(16).toUpperCase();
+if(k==="lockSleepSource")return v===1?"0x273":v;
+if(k==="lockSleep273Request"){if(v===1)return "1 LOCK";if(v===4)return "4 REMOTE_LOCK";if(v===255)return "未解码";return v}
+if(k==="lockSleep273Matched")return v?"命中":"未命中";
+if(k==="lockSleep339SimpleStatus"){if(v===0)return "0 SNA";if(v===1)return "1 解锁";if(v===2)return "2 锁定";if(v===255)return "未解码";return v}
+if(k==="lockSleep339VehicleStatus"){
+const m={0:"0 SNA",1:"1 NFC解锁",2:"2 NFC锁定",3:"3 被动选择解锁",4:"4 BLE解锁",5:"5 BLE锁定",6:"6 主动选择解锁",7:"7 主动BLE解锁",8:"8 主动BLE锁定",9:"9 UI解锁",10:"10 UI锁定",11:"11 远程解锁",12:"12 远程锁定",13:"13 碰撞解锁",14:"14 内部被动解锁",15:"15 内部被动锁定",255:"未解码"};return m[v]||v}
+if(k==="lockSleep3F5HazardRequest"){
+const m={0:"0 无",1:"1 按钮双闪",2:"2 锁车灯光",3:"3 解锁灯光",4:"4 未锁好",5:"5 碰撞",6:"6 防盗报警",7:"7 DAS",8:"8 诊断",255:"未解码"};return m[v]||v}
+if(k==="batteryPreheatUiPowerW")return v===-32768?"SNA":(v+" W");
+if(k==="batteryPreheatUiTargetCx100"||k==="batteryPreheatUiAmbientCx100")return v===-32768?"SNA":((v/100).toFixed(2)+" C");
+if(k==="batteryPreheatUiChargeTargetCx10")return v===-32768?"SNA":((v/10).toFixed(1)+" %");
+if(k==="batteryPreheatUiEnergyAtDestination")return v===-32768?"SNA":v;
+if(k==="batteryPreheatUiState")return ["被动加热","主动加热","被动冷却","主动冷却"][v]||v;
+if(k==="batteryPreheatUiFastChargerType")return ["无","低功率","V2","V3","V4"][v]||v;
+if(k==="dasAutopilotState")return ["DISABLED","UNAVAILABLE","AVAILABLE","ACTIVE_NOMINAL","ACTIVE_RESTRICTED","ACTIVE_NAV","ACTIVE_FSD"][v]||v;
+if(k==="scrollGearInjectBlocked")return ["ok","bad_target","brake","speed","same_gear","cooldown","ap_state"][v]||v;
+return v}
 function updateBms712(j){const e=document.getElementById("bms712Raw");if(!e)return;if((j.bmsTempFrameId>>>0)!==0x712){e.textContent="未收到0x712";return}const p=(j.bmsTempFramePayload||"").split(" ");e.textContent="mux "+j.bmsTempFrameMux+" / b1-b7 "+p.slice(1).join(" ")}
 function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{stats.forEach(k=>{const e=document.getElementById(k);if(e&&k in j)e.textContent=fmtStat(k,j[k])});updateBms712(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}

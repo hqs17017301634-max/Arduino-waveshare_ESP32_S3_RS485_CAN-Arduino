@@ -160,6 +160,7 @@ struct RuntimeConfig {
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool batteryPreheatEnabled = false; // sends UI_tripPlanning 0x082 every 200 ms
+  bool batteryPreheatReplayEnabled = false; // experimental: replay a UI trip-planning preheat frame group
   bool scrollGearSimEnabled = true;    // show brake + right-scroll D/R intent only
   bool scrollGearInjectEnabled = false; // experimental: inject 0x229 right-stalk D/R request
   bool can1ReceiveOnly = false;        // bus=1/TWAI/physical CANB RX-only: gate TWAI TX
@@ -202,6 +203,10 @@ struct RuntimeStatus {
   int batteryPreheatUiChargeTargetCx10 = 0;
   int batteryPreheatUiEnergyAtDestination = 0;
   uint32_t batteryPreheatVehicleAgeMs = 0;
+  uint8_t batteryPreheatReplayActive = 0;
+  uint8_t batteryPreheatReplayCachedMask = 0;
+  uint32_t batteryPreheatReplayTxCount = 0;
+  uint32_t batteryPreheatReplayAgeMs = 0;
   uint8_t bmsTempFrameSeen = 0;
   uint32_t bmsTempFrameId = 0;
   uint8_t bmsTempFrameBus = 0;
@@ -226,6 +231,20 @@ struct RuntimeStatus {
   uint32_t lockSleepLastId = 0;
   uint8_t lockSleepSource = 0; // 1=0x273 UI lock request
   uint32_t lockSleepAgeMs = 0;
+  uint8_t lockSleep273Seen = 0;
+  uint8_t lockSleep273Request = 255;
+  uint8_t lockSleep273Matched = 0;
+  uint32_t lockSleep273AgeMs = 0;
+  char lockSleep273Payload[24] = "-";
+  uint8_t lockSleep339Seen = 0;
+  uint8_t lockSleep339SimpleStatus = 255;
+  uint8_t lockSleep339VehicleStatus = 255;
+  uint32_t lockSleep339AgeMs = 0;
+  char lockSleep339Payload[24] = "-";
+  uint8_t lockSleep3F5Seen = 0;
+  uint8_t lockSleep3F5HazardRequest = 255;
+  uint32_t lockSleep3F5AgeMs = 0;
+  char lockSleep3F5Payload[24] = "-";
 
   int fusedLimitKph = 0;
   int targetSpeedKph = 0;
@@ -377,6 +396,9 @@ static volatile bool canTxInhibitedForSleep = false;
 static bool lockDeepSleepPending = false;
 static uint32_t lockDeepSleepPendingMs = 0;
 static uint32_t lockSleepLastSignalMs = 0;
+static uint32_t lockSleep273LastRxMs = 0;
+static uint32_t lockSleep339LastRxMs = 0;
+static uint32_t lockSleep3F5LastRxMs = 0;
 
 static bool isRelevantCanId(uint32_t canId);
 static void serviceTwaiAlerts();
@@ -492,6 +514,10 @@ static void serviceTwaiAlerts() {
 constexpr uint32_t CAN_ID_FOLLOW_DISTANCE = 1016;
 constexpr uint32_t CAN_ID_AP_CONTROL = 1021;
 constexpr uint32_t CAN_ID_UI_TRIP_PLANNING = 0x082;
+constexpr uint32_t CAN_ID_UI_TRIP_PLANNING2 = 0x08B;
+constexpr uint32_t CAN_ID_UI_TRIP_PLANNING3 = 0x495;
+constexpr uint32_t CAN_ID_UI_TRIP_PLANNING4 = 0x496;
+constexpr uint32_t CAN_ID_UI_TRIP_PLANNING5 = 0x497;
 constexpr uint32_t CAN_ID_BMS_THERMAL_STATUS = 0x312;
 constexpr uint32_t CAN_ID_BMS_LOG1 = 0x374;
 constexpr uint32_t CAN_ID_BMS_PACK_TEMPERATURES = 0x712;
@@ -527,11 +553,47 @@ static inline bool isRelevantCanId(uint32_t canId) {
 // valid vehicle frame as the template and only override byte0.
 static const uint8_t BATTERY_PREHEAT_FALLBACK[8] = {0x01, 0x50, 0xAC, 0x32, 0xFF, 0x03, 0x61, 0x15};
 constexpr uint32_t BATTERY_PREHEAT_PERIOD_MS = 200UL;
+constexpr uint32_t BATTERY_PREHEAT_REPLAY_PERIOD_MS = 500UL;
+constexpr uint32_t BATTERY_PREHEAT_REPLAY_CACHE_MAX_AGE_MS = 30000UL;
+constexpr uint8_t BATTERY_PREHEAT_REPLAY_FRAME_COUNT = 5;
 static uint8_t batteryPreheatTemplate[8] = {0x01, 0x50, 0xAC, 0x32, 0xFF, 0x03, 0x61, 0x15};
 static bool batteryPreheatTemplateValid = false;
 static uint8_t batteryPreheatOffFramesLeft = 0;
+static uint8_t batteryPreheatReplayOffFramesLeft = 0;
 static uint32_t batteryPreheatLastRxMs = 0;
+static uint32_t batteryPreheatReplayLastSendMs = 0;
+static uint32_t batteryPreheatReplayLastRxMs = 0;
 static uint32_t bmsTempLastRxMs = 0;
+
+static const uint32_t BATTERY_PREHEAT_REPLAY_IDS[BATTERY_PREHEAT_REPLAY_FRAME_COUNT] = {
+    CAN_ID_UI_TRIP_PLANNING,
+    CAN_ID_UI_TRIP_PLANNING2,
+    CAN_ID_UI_TRIP_PLANNING3,
+    CAN_ID_UI_TRIP_PLANNING4,
+    CAN_ID_UI_TRIP_PLANNING5,
+};
+
+// Real 0x082 comes from capture 93/94/95. The companion frames are conservative
+// non-SNA placeholders until live frames are cached from a real navigation route.
+static const uint8_t BATTERY_PREHEAT_REPLAY_ON[BATTERY_PREHEAT_REPLAY_FRAME_COUNT][8] = {
+    {0xAF, 0x50, 0xAC, 0x32, 0xFF, 0x03, 0x61, 0x15},
+    {0x64, 0x00, 0x50, 0x00, 0x10, 0x0E, 0x00, 0x00},
+    {0x61, 0x15, 0x61, 0x15, 0x61, 0x15, 0x61, 0x15},
+    {0x61, 0x15, 0x61, 0x15, 0x00, 0x00, 0x64, 0x00},
+    {0x78, 0x00, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x00},
+};
+
+static const uint8_t BATTERY_PREHEAT_REPLAY_OFF[BATTERY_PREHEAT_REPLAY_FRAME_COUNT][8] = {
+    {0x01, 0x50, 0xAC, 0x32, 0xFF, 0x03, 0x61, 0x15},
+    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00},
+    {0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80},
+    {0x00, 0x80, 0x00, 0x80, 0x80, 0xFF, 0xFF, 0xFF},
+    {0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00},
+};
+
+static can_frame batteryPreheatReplayCache[BATTERY_PREHEAT_REPLAY_FRAME_COUNT];
+static uint32_t batteryPreheatReplayRxMs[BATTERY_PREHEAT_REPLAY_FRAME_COUNT] = {};
+static bool batteryPreheatReplayCacheValid[BATTERY_PREHEAT_REPLAY_FRAME_COUNT] = {};
 
 static int8_t signedByte(uint8_t raw) {
   return raw >= 0x80 ? static_cast<int8_t>(static_cast<int>(raw) - 256) : static_cast<int8_t>(raw);
@@ -547,6 +609,35 @@ static void formatPayload8(const can_frame& frame, char out[24]) {
     out[pos++] = hex[frame.data[i] & 0x0F];
   }
   out[pos] = '\0';
+}
+
+static int8_t batteryPreheatReplayIndexForId(uint32_t canId) {
+  for (uint8_t i = 0; i < BATTERY_PREHEAT_REPLAY_FRAME_COUNT; ++i) {
+    if (BATTERY_PREHEAT_REPLAY_IDS[i] == canId) return static_cast<int8_t>(i);
+  }
+  return -1;
+}
+
+static uint8_t batteryPreheatReplayCachedMask(uint32_t now) {
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < BATTERY_PREHEAT_REPLAY_FRAME_COUNT; ++i) {
+    if (batteryPreheatReplayCacheValid[i] &&
+        (now - batteryPreheatReplayRxMs[i]) <= BATTERY_PREHEAT_REPLAY_CACHE_MAX_AGE_MS) {
+      mask |= static_cast<uint8_t>(1U << i);
+    }
+  }
+  return mask;
+}
+
+static void cacheBatteryPreheatReplayFrame(const can_frame& frame) {
+  const int8_t idx = batteryPreheatReplayIndexForId(frame.can_id);
+  if (idx < 0 || frame.can_dlc == 0 || frame.can_dlc > 8) return;
+  batteryPreheatReplayCache[idx] = frame;
+  const uint32_t now = millis();
+  batteryPreheatReplayRxMs[idx] = now;
+  batteryPreheatReplayLastRxMs = now;
+  batteryPreheatReplayCacheValid[idx] = true;
+  g_status.batteryPreheatReplayCachedMask = batteryPreheatReplayCachedMask(now);
 }
 
 static bool isUsableBatteryPreheatContext(const can_frame& frame) {
@@ -592,6 +683,29 @@ static void makeBatteryPreheatPayload(uint8_t payload[8], bool enabled) {
   payload[0] = enabled ? 0xAF : 0x01;
 }
 
+static can_frame makeBatteryPreheatReplayFrame(uint8_t idx, bool enabled) {
+  can_frame f = {};
+  f.can_id = BATTERY_PREHEAT_REPLAY_IDS[idx];
+  f.can_dlc = 8;
+
+  if (idx == 0) {
+    makeBatteryPreheatPayload(f.data, enabled);
+    return f;
+  }
+
+  const uint32_t now = millis();
+  if (batteryPreheatReplayCacheValid[idx] &&
+      (now - batteryPreheatReplayRxMs[idx]) <= BATTERY_PREHEAT_REPLAY_CACHE_MAX_AGE_MS) {
+    f = batteryPreheatReplayCache[idx];
+    return f;
+  }
+
+  memcpy(f.data,
+         enabled ? BATTERY_PREHEAT_REPLAY_ON[idx] : BATTERY_PREHEAT_REPLAY_OFF[idx],
+         8);
+  return f;
+}
+
 static void sendBatteryPreheatFrame(const uint8_t payload[8]) {
   can_frame f = {};
   f.can_id = CAN_ID_UI_TRIP_PLANNING;
@@ -602,6 +716,65 @@ static void sendBatteryPreheatFrame(const uint8_t payload[8]) {
 #else
   twai_send(f);
 #endif
+}
+
+static bool sendBatteryPreheatReplayFrame(uint8_t idx, bool enabled) {
+  const can_frame f = makeBatteryPreheatReplayFrame(idx, enabled);
+#ifdef ENABLE_CANB_MCP2515
+  return canb_send(f);
+#else
+  return twai_send(f);
+#endif
+}
+
+static void sendBatteryPreheatReplayGroup(bool enabled) {
+  for (uint8_t i = 0; i < BATTERY_PREHEAT_REPLAY_FRAME_COUNT; ++i) {
+    if (sendBatteryPreheatReplayFrame(i, enabled)) {
+      g_status.batteryPreheatReplayTxCount++;
+    }
+  }
+}
+
+static void serviceBatteryPreheatReplay(const RuntimeConfig& cfg) {
+  const uint32_t now = millis();
+  g_status.batteryPreheatReplayCachedMask = batteryPreheatReplayCachedMask(now);
+  g_status.batteryPreheatReplayAgeMs =
+      batteryPreheatReplayLastRxMs == 0 ? 0 : (now - batteryPreheatReplayLastRxMs);
+
+#ifdef ENABLE_CANB_MCP2515
+  if (!cfg.canbEnabled) {
+    g_status.batteryPreheatReplayActive = 0;
+    batteryPreheatReplayLastSendMs = 0;
+    batteryPreheatReplayOffFramesLeft = 0;
+    return;
+  }
+#endif
+
+  if (!cfg.batteryPreheatReplayEnabled) {
+    g_status.batteryPreheatReplayActive = 0;
+    if (batteryPreheatReplayOffFramesLeft > 0) {
+      if (batteryPreheatReplayLastSendMs == 0 ||
+          (now - batteryPreheatReplayLastSendMs) >= BATTERY_PREHEAT_PERIOD_MS) {
+        batteryPreheatReplayLastSendMs = now;
+        sendBatteryPreheatReplayFrame(0, false);
+        batteryPreheatReplayOffFramesLeft--;
+      }
+    } else {
+      batteryPreheatReplayLastSendMs = 0;
+    }
+    return;
+  }
+
+  g_status.batteryPreheatReplayActive = 1;
+  g_status.batteryPreheatActive = 1;
+  batteryPreheatReplayOffFramesLeft = 3;
+  if (batteryPreheatReplayLastSendMs != 0 &&
+      (now - batteryPreheatReplayLastSendMs) < BATTERY_PREHEAT_REPLAY_PERIOD_MS) {
+    return;
+  }
+
+  batteryPreheatReplayLastSendMs = now;
+  sendBatteryPreheatReplayGroup(true);
 }
 
 static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
@@ -615,6 +788,10 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
     return;
   }
 #endif
+
+  if (cfg.batteryPreheatReplayEnabled) {
+    return;
+  }
 
   if (!cfg.batteryPreheatEnabled) {
     g_status.batteryPreheatActive = 0;
@@ -1480,6 +1657,44 @@ static bool isVehicleLockSignal(const can_frame& frame, uint8_t& source) {
   return false;
 }
 
+static void observeLockSleepFrame(const can_frame& frame) {
+  const uint32_t now = millis();
+
+  if (frame.can_id == CANB_ID_BODY_LIGHTING) {
+    lockSleep273LastRxMs = now;
+    g_status.lockSleep273Seen = 1;
+    formatPayload8(frame, g_status.lockSleep273Payload);
+
+    uint32_t raw = 0;
+    if (frame.can_dlc >= 3 && readBitsLE(frame, 17, 3, raw)) {
+      const uint8_t request = static_cast<uint8_t>(raw);
+      g_status.lockSleep273Request = request;
+      g_status.lockSleep273Matched = (request == 1 || request == 4) ? 1 : 0;
+    } else {
+      g_status.lockSleep273Request = 255;
+      g_status.lockSleep273Matched = 0;
+    }
+  } else if (frame.can_id == CANB_ID_VCSEC_STATUS) {
+    lockSleep339LastRxMs = now;
+    g_status.lockSleep339Seen = 1;
+    formatPayload8(frame, g_status.lockSleep339Payload);
+
+    uint32_t raw = 0;
+    g_status.lockSleep339VehicleStatus =
+        readBitsLE(frame, 12, 4, raw) ? static_cast<uint8_t>(raw) : 255;
+    g_status.lockSleep339SimpleStatus =
+        readBitsLE(frame, 54, 2, raw) ? static_cast<uint8_t>(raw) : 255;
+  } else if (frame.can_id == CANB_ID_LIGHTING_STATUS) {
+    lockSleep3F5LastRxMs = now;
+    g_status.lockSleep3F5Seen = 1;
+    formatPayload8(frame, g_status.lockSleep3F5Payload);
+
+    uint32_t raw = 0;
+    g_status.lockSleep3F5HazardRequest =
+        readBitsLE(frame, 4, 4, raw) ? static_cast<uint8_t>(raw) : 255;
+  }
+}
+
 static void requestLockDeepSleep(const can_frame& frame, uint8_t source) {
   if (!g_config.lockDeepSleepEnabled || lockDeepSleepPending) return;
   canTxInhibitedForSleep = true;
@@ -1895,6 +2110,8 @@ static void handleVcleftSwitchFrame(const can_frame& frame, const RuntimeConfig&
 static void handleCanBFrame(const can_frame& frame) {
   // Stage 1: statistics only. No heavy work, no Serial, no JSON, no bridging.
   canbLastId = frame.can_id;
+  observeLockSleepFrame(frame);
+
   uint8_t lockSource = 0;
   if (isVehicleLockSignal(frame, lockSource)) {
     lockSleepLastSignalMs = millis();
@@ -1954,6 +2171,10 @@ static void handleCanBFrame(const can_frame& frame) {
     const RuntimeConfig cfg = configSnapshot();
     const bool brakeActive = (frame.data[7] & 0x01) != 0;
     handleRearFogBrakeLampState(brakeActive, cfg);
+  }
+
+  if (batteryPreheatReplayIndexForId(frame.can_id) >= 0) {
+    cacheBatteryPreheatReplayFrame(frame);
   }
 
   if (frame.can_id == CAN_ID_UI_TRIP_PLANNING && frame.can_dlc >= 8) {
@@ -2051,12 +2272,17 @@ static void handleStatus() {
   RuntimeStatus s = g_status;
   const uint32_t now = millis();
   s.batteryPreheatVehicleAgeMs = batteryPreheatLastRxMs == 0 ? 0 : (now - batteryPreheatLastRxMs);
+  s.batteryPreheatReplayCachedMask = batteryPreheatReplayCachedMask(now);
+  s.batteryPreheatReplayAgeMs = batteryPreheatReplayLastRxMs == 0 ? 0 : (now - batteryPreheatReplayLastRxMs);
   s.bmsTempFrameAgeMs = bmsTempLastRxMs == 0 ? 0 : (now - bmsTempLastRxMs);
   s.lockSleepArmed = c.lockDeepSleepEnabled ? 1 : 0;
   s.lockSleepAgeMs = lockSleepLastSignalMs == 0 ? 0 : (now - lockSleepLastSignalMs);
+  s.lockSleep273AgeMs = lockSleep273LastRxMs == 0 ? 0 : (now - lockSleep273LastRxMs);
+  s.lockSleep339AgeMs = lockSleep339LastRxMs == 0 ? 0 : (now - lockSleep339LastRxMs);
+  s.lockSleep3F5AgeMs = lockSleep3F5LastRxMs == 0 ? 0 : (now - lockSleep3F5LastRxMs);
 
   String j;
-  j.reserve(2400);
+  j.reserve(3600);
   j += '{';
   j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
@@ -2086,6 +2312,7 @@ static void handleStatus() {
   j += ",\"rearFogBrakeStrobeEnabled\":"; j += c.rearFogBrakeStrobeEnabled ? 1 : 0;
   j += ",\"reverseStrobeEnabled\":"; j += c.reverseStrobeEnabled ? 1 : 0;
   j += ",\"batteryPreheatEnabled\":"; j += c.batteryPreheatEnabled ? 1 : 0;
+  j += ",\"batteryPreheatReplayEnabled\":"; j += c.batteryPreheatReplayEnabled ? 1 : 0;
   j += ",\"lockDeepSleepEnabled\":"; j += c.lockDeepSleepEnabled ? 1 : 0;
   j += ",\"scrollGearSimEnabled\":"; j += c.scrollGearSimEnabled ? 1 : 0;
   j += ",\"scrollGearInjectEnabled\":"; j += c.scrollGearInjectEnabled ? 1 : 0;
@@ -2121,6 +2348,10 @@ static void handleStatus() {
   j += ",\"batteryPreheatUiChargeTargetCx10\":"; j += s.batteryPreheatUiChargeTargetCx10;
   j += ",\"batteryPreheatUiEnergyAtDestination\":"; j += s.batteryPreheatUiEnergyAtDestination;
   j += ",\"batteryPreheatVehicleAgeMs\":"; j += s.batteryPreheatVehicleAgeMs;
+  j += ",\"batteryPreheatReplayActive\":"; j += s.batteryPreheatReplayActive;
+  j += ",\"batteryPreheatReplayCachedMask\":"; j += s.batteryPreheatReplayCachedMask;
+  j += ",\"batteryPreheatReplayTxCount\":"; j += s.batteryPreheatReplayTxCount;
+  j += ",\"batteryPreheatReplayAgeMs\":"; j += s.batteryPreheatReplayAgeMs;
   j += ",\"bmsTempFrameSeen\":"; j += s.bmsTempFrameSeen;
   j += ",\"bmsTempFrameId\":"; j += s.bmsTempFrameId;
   j += ",\"bmsTempFrameBus\":"; j += s.bmsTempFrameBus;
@@ -2132,6 +2363,20 @@ static void handleStatus() {
   j += ",\"lockSleepLastId\":"; j += s.lockSleepLastId;
   j += ",\"lockSleepSource\":"; j += s.lockSleepSource;
   j += ",\"lockSleepAgeMs\":"; j += s.lockSleepAgeMs;
+  j += ",\"lockSleep273Seen\":"; j += s.lockSleep273Seen;
+  j += ",\"lockSleep273Request\":"; j += s.lockSleep273Request;
+  j += ",\"lockSleep273Matched\":"; j += s.lockSleep273Matched;
+  j += ",\"lockSleep273AgeMs\":"; j += s.lockSleep273AgeMs;
+  j += ",\"lockSleep273Payload\":\""; j += s.lockSleep273Payload; j += '"';
+  j += ",\"lockSleep339Seen\":"; j += s.lockSleep339Seen;
+  j += ",\"lockSleep339SimpleStatus\":"; j += s.lockSleep339SimpleStatus;
+  j += ",\"lockSleep339VehicleStatus\":"; j += s.lockSleep339VehicleStatus;
+  j += ",\"lockSleep339AgeMs\":"; j += s.lockSleep339AgeMs;
+  j += ",\"lockSleep339Payload\":\""; j += s.lockSleep339Payload; j += '"';
+  j += ",\"lockSleep3F5Seen\":"; j += s.lockSleep3F5Seen;
+  j += ",\"lockSleep3F5HazardRequest\":"; j += s.lockSleep3F5HazardRequest;
+  j += ",\"lockSleep3F5AgeMs\":"; j += s.lockSleep3F5AgeMs;
+  j += ",\"lockSleep3F5Payload\":\""; j += s.lockSleep3F5Payload; j += '"';
   j += ",\"rightScrollTicks\":";     j += s.rightScrollTicks;
   j += ",\"rightStalkStatus\":";     j += s.rightStalkStatus;
   j += ",\"rightStalkCounter\":";    j += s.rightStalkCounter;
@@ -2195,6 +2440,7 @@ static void handleConfig() {
   c.rearFogBrakeStrobeEnabled = argBool("rearFogBrakeStrobeEnabled", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled    = argBool("reverseStrobeEnabled", c.reverseStrobeEnabled);
   c.batteryPreheatEnabled   = argBool("batteryPreheatEnabled", c.batteryPreheatEnabled);
+  c.batteryPreheatReplayEnabled = argBool("batteryPreheatReplayEnabled", c.batteryPreheatReplayEnabled);
   c.lockDeepSleepEnabled    = argBool("lockDeepSleepEnabled", c.lockDeepSleepEnabled);
   c.scrollGearSimEnabled    = argBool("scrollGearSimEnabled", c.scrollGearSimEnabled);
   c.scrollGearInjectEnabled = argBool("scrollGearInjectEnabled", c.scrollGearInjectEnabled);
@@ -2203,6 +2449,9 @@ static void handleConfig() {
   const bool newServiceMode = argBool("canbServiceModeEnabled", c.canbServiceModeEnabled);
   const bool serviceModeChanged = (newServiceMode != c.canbServiceModeEnabled);
   c.canbServiceModeEnabled  = newServiceMode;
+  if (c.batteryPreheatReplayEnabled) {
+    c.canbFilterMode = CANB_FILTER_ALL;
+  }
   applyBuildModeGuards(c);
 
   portENTER_CRITICAL(&g_cfgMux);
@@ -2455,10 +2704,14 @@ static void loadConfigFromPrefs() {
   c.rearFogBrakeStrobeEnabled = prefs.getBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled   = prefs.getBool("revStrobe", c.reverseStrobeEnabled);
   c.batteryPreheatEnabled  = prefs.getBool("batHeat", c.batteryPreheatEnabled);
+  c.batteryPreheatReplayEnabled = prefs.getBool("batReplay", c.batteryPreheatReplayEnabled);
   c.lockDeepSleepEnabled   = prefs.getBool("lockSleep", c.lockDeepSleepEnabled);
   c.scrollGearSimEnabled   = prefs.getBool("gearSim", c.scrollGearSimEnabled);
   c.scrollGearInjectEnabled = prefs.getBool("gearInject", c.scrollGearInjectEnabled);
   c.can1ReceiveOnly        = prefs.getBool("can1RxOnly", c.can1ReceiveOnly);
+  if (c.batteryPreheatReplayEnabled) {
+    c.canbFilterMode = CANB_FILTER_ALL;
+  }
   prefs.end();
   applyBuildModeGuards(c);
 
@@ -2489,6 +2742,7 @@ static void saveConfigToPrefs() {
   prefs.putBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   prefs.putBool("revStrobe", c.reverseStrobeEnabled);
   prefs.putBool("batHeat", c.batteryPreheatEnabled);
+  prefs.putBool("batReplay", c.batteryPreheatReplayEnabled);
   prefs.putBool("lockSleep", c.lockDeepSleepEnabled);
   prefs.putBool("gearSim", c.scrollGearSimEnabled);
   prefs.putBool("gearInject", c.scrollGearInjectEnabled);
@@ -2613,7 +2867,9 @@ void loop() {
     return;
   }
 
-  serviceBatteryPreheat(configSnapshot());
+  RuntimeConfig preheatCfg = configSnapshot();
+  serviceBatteryPreheatReplay(preheatCfg);
+  serviceBatteryPreheat(preheatCfg);
 
   if (!didWork) {
     digitalWrite(PIN_LED, HIGH);
