@@ -60,7 +60,7 @@ Primary bus: `bus=1` / TWAI / physical CANB.
 | `0x399` | Fused speed limit | Reads `data[1] & 0x1F`; raw `0` and `31` are invalid; valid value is `raw * 5 kph`. |
 | `1016` / `0x3F8` | Follow distance | Reads `data[5] bit 5..7` and updates `speedProfile`. |
 | `1021` / `0x3FD` mux 0 | FSD/profile control | Sets bit `46`, writes `speedProfile` into `data[6] bit 1..2`, then transmits. |
-| `1021` / `0x3FD` mux 1 | Control bit | Clears bit `19`, then transmits. |
+| `1021` / `0x3FD` mux 1 | Control/cabin camera bits | Clears bit `19`; optional WebUI switches only clear cabin camera bit `43` and telemetry bit `48` when enabled. |
 | `1021` / `0x3FD` mux 2 | Speed offset | Writes the computed PCT4 speed-offset raw value after downward slew limiting. |
 
 Follow-distance mapping:
@@ -115,10 +115,9 @@ Secondary bus: `bus=2` / MCP2515 / physical CANA.
 - Normal drain budget: up to 4 frames per loop.
 - When MCP2515 INT `GPIO8` is asserted or recorder is active: up to 24 frames with a 900 us time cap.
 - Hardware filter modes:
-  - `0`: receive all standard frames for debugging.
-  - `1`: feature IDs.
-  - `2`: minimum runtime IDs.
-- Feature/minimum filters include `0x082` and `0x339` so battery-preheat monitoring and VCSEC service/status frames are not lost.
+  - `0`: capture/debug, receive all standard frames.
+  - `1`: current feature-related IDs.
+- Feature filtering includes `0x082`, `0x339`, and `0x3C2` so battery-preheat, VCSEC service/status, and scroll-wheel DND frames are not lost. Legacy saved mode `2` is mapped to feature filtering.
 
 Implemented `bus=2` features:
 
@@ -127,36 +126,61 @@ Implemented `bus=2` features:
 - **Rear-fog deceleration strobe (`0x273`)**: when armed, mild deceleration triggers 3 pulses and hard deceleration triggers 5 pulses. Cadence is 500 ms.
 - **Reverse hazard + rear-fog strobe**: when armed, reverse gear on `bus=1` `0x118`, or brake + right-scroll back on `bus=2` `0x3C2`, triggers hazard and rear-fog pulses.
 - **Scroll gear injection (`0x229`)**: experimental, default off. With brake pressed, right-scroll back requests R and right-scroll forward requests D. Injection is allowed only when FSD injection is disabled, or when the latest `0x399 DAS_autopilotState` is normal/non-active (`0=DISABLED`, `1=UNAVAILABLE`, or `2=AVAILABLE`); active AP/FSD states block injection.
-- **Battery preheat (`0x082`)**: when enabled, sends dynamic `UI_tripPlanning` on `bus=2` every 200 ms.
-- **Lock-triggered deep sleep**: when enabled, detects only `0x273 UI_lockRequest = LOCK/REMOTE_LOCK`, inhibits all CAN TX, shuts down WiFi/TWAI, and enters ESP32 deep sleep. `0x339` no longer triggers sleep by itself.
+- **Battery preheat (`0x082`)**: when enabled, sends fixed `AF 50 94 39 FF 03 83 05` on `bus=2` every 500 ms.
+- **DND volume mitigation (`0x399` + `0x3C2`)**: default off. Active AP/FSD state from `0x399` starts a random 1-5 s four-step left-scroll volume up/down sequence on `bus=2` `0x3C2`.
+- **Nag-Killer torque mitigation (`0x052` / `0x370`)**: experimental, default off. Mode B echoes `0x052` with burst/pause torque cycling; Mode C echoes `0x370` using the hands-on state machine.
+- **Lock-triggered deep sleep**: when enabled, uses `0x339 VCSEC simplified lock status = 2 (LOCKED)` as the only lock trigger, but it must stay stable for 5 s and cabin-empty evidence must be present before CAN TX is inhibited and ESP32 deep sleep starts. Simplified status `1` is decoded as unlocked and resets the timer.
 
 ### Battery Preheat Details
 
-The firmware caches the latest valid vehicle `0x082` context (`byte1..7`) and only overrides `byte0`.
+The firmware uses the fixed `0x082` payload verified on the vehicle. The old dynamic-template sender and `0x08B/0x495/0x496/0x497` replay sender were removed.
 
-- Current fallback/context bytes: `01 50 AC 32 FF 03 61 15`.
-- WebUI ON frame becomes: `AF 50 AC 32 FF 03 61 15`.
-- WebUI OFF uses byte0 `0x01` and sends several OFF frames before stopping.
+- WebUI ON frame: `AF 50 94 39 FF 03 83 05`.
+- WebUI OFF frame: `01 50 94 39 FF 03 83 05`, sent several times before stopping.
+- WebUI diagnostics show preheat active state, TX count, last-send age, decoded `0x082` feedback, preheat power, target/ambient temperature, and energy-at-destination as decimal values.
+- WebUI battery temperature display decodes valid `0x712` mux 0..3 candidate temperatures as decimal Celsius and shows latest mux plus min/average/max.
+- BMS temperature candidate diagnostics still cover `0x312`, `0x712`, and `0x374`.
 
-WebUI diagnostics decode:
+Set MCP2515 hardware filter to capture/debug when testing BMS temperature diagnostics, because `0x712` and other BMS candidate IDs are not in the current feature filter set.
 
-- request/state bits,
-- power request,
-- target temperature,
-- destination ambient temperature,
-- charge target,
-- raw energy-at-destination value,
-- BMS temperature candidate frames `0x312`, `0x712`, and `0x374`.
+### DND Volume Mitigation
 
-Set MCP2515 hardware filter to receive-all when testing BMS temperature diagnostics, because those BMS candidate IDs are not in the feature/minimum filter set.
+The DND feature is volume-only; it does not inject steering torque.
+
+- Status source: `bus=1` / TWAI / physical CANB, `0x399`.
+- Volume trigger: active AP/FSD state from `0x399` starts an automatic random 1-5 s repeat.
+- Output path: `bus=2` / MCP2515 / physical CANA, latest live `0x3C2` mux1 scroll frame.
+- Volume action: `data[2] = 0x01 -> 0x00 -> 0x3F -> 0x00`.
+- Step interval: 50 ms.
+
+The firmware requires a fresh live `0x3C2` mux1 cache before sending DND frames. The observed vehicle payload keeps the scroll frame checksum/counter bytes stable while `data[2]` changes, so this implementation copies the live frame and only modifies the left-scroll tick byte.
+
+### Nag-Killer Torque Mitigation
+
+This feature is experimental and defaults off. It uses `bus=1` / TWAI / physical CANB and always sends through the normal `twai_send()` gate, so `can1ReceiveOnly` blocks its TX.
+
+- Mode B target: `0x052`; requires fresh `0x399` AP/FSD active state. Default cadence is 1000 ms injection and 1500 ms rest. During injection it cycles the WebUI torque points, defaulting to `+1.80`, `+1.50`, `-1.50`, `-1.80` Nm, and sets handsOn.
+- Mode C target: `0x370`; requires fresh `0x399` plus fresh `0x129` steering angle. It uses `0x399 data[5] >> 2 & 0x0F` for hands-on state, waits 2 s in state 2 before mild random-walk torque, and waits 1 s in state 3 before a WebUI-configurable sweep, defaulting to `-1.8..+1.8 Nm`.
+- `0x129` steering angle follows the DBC signal `SCCM_steeringAngle : 16|14@1+ (0.1,-819.2)`, so the firmware decodes the low 14 bits from `data[2..3]`.
+- WebUI torque fields all take magnitude values from `0..2.8 Nm`; the fixed `+` / `-` marker beside each field decides the actual sign.
+- Both modes copy the live target frame, modify torque bytes, optionally set handsOn bit 6 in `data[4]`, increment the low-nibble counter in `data[6]`, and recalculate checksum as `sum(data[0..6]) + 0x73`.
 
 ### Lock Deep Sleep
 
-When enabled from WebUI, lock sleep only references `bus=2` / MCP2515 / physical CANA:
+When enabled from WebUI, lock sleep uses `bus=2` / MCP2515 / physical CANA as the lock trigger path:
 
-- `0x273` lock request values `1` or `4`.
+- `0x339` VCSEC simplified lock status, bits `54..55`.
+- Value `2` means locked candidate and must remain stable for 5 s.
+- Value `1` means unlocked and resets the stable timer.
 
-`0x339` VCSEC authentication/status remains available for service/status handling, but it is not a standalone sleep trigger.
+Cabin-empty evidence is decoded from:
+
+- `bus=1` / TWAI `0x3A1`: driver-present bit 7, passenger-present bit 8, and rear-row occupied/unbuckled hints when present.
+- `bus=2` / MCP2515 `0x3C2` mux0: driver and rear seat occupancy switch values (`1=empty`, `2=occupied`).
+
+Deep sleep is requested only after `0x339=2` is stable and the cached occupancy state says the cabin is empty.
+
+The old `0x273` UI lock request and `0x3F5` lighting feedback lock-sleep diagnostics were removed from the firmware/WebUI path.
 
 On a validated lock signal:
 
@@ -166,7 +190,7 @@ On a validated lock signal:
 - TWAI is stopped and uninstalled,
 - ESP32 enters deep sleep.
 
-No seat, EPAS, or generic timeout sleep heuristic is included. In the intended vehicle USB-power installation, the board wakes by cold-booting when USB power returns.
+No EPAS or generic timeout sleep heuristic is included. In the intended vehicle USB-power installation, the board wakes by cold-booting when USB power returns.
 
 ### WebUI
 
@@ -191,6 +215,7 @@ The WebUI exposes:
 - lighting/strobe features,
 - scroll gear injection,
 - battery preheat,
+- DND volume mitigation,
 - lock deep sleep,
 - receive-only TWAI mode,
 - status counters,
@@ -294,7 +319,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 | `0x399` | 融合限速 | 读取 `data[1] & 0x1F`；raw `0` 和 `31` 无效；有效值为 `raw * 5 kph`。 |
 | `1016` / `0x3F8` | 跟车距离 | 读取 `data[5] bit 5..7`，更新 `speedProfile`。 |
 | `1021` / `0x3FD` mux 0 | FSD/速度档控制 | 设置 bit `46`，把 `speedProfile` 写入 `data[6] bit 1..2`，然后发送。 |
-| `1021` / `0x3FD` mux 1 | 控制位 | 清除 bit `19`，然后发送。 |
+| `1021` / `0x3FD` mux 1 | 控制位/座舱摄像头 | 清除 bit `19`；WebUI 可选开关只有启用时才清零座舱摄像头 bit `43` 和遥测 bit `48`。 |
 | `1021` / `0x3FD` mux 2 | 速度偏移 | 写入经过缓降限制后的 PCT4 offset raw。 |
 
 跟车距离映射：
@@ -349,10 +374,9 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 - 普通循环每轮最多读取 4 帧。
 - MCP2515 INT `GPIO8` 触发或抓包开启时，最多读取 24 帧，并有 900 us 时间上限。
 - 硬件过滤模式：
-  - `0`：接收全部标准帧，用于调试。
-  - `1`：功能相关 ID。
-  - `2`：最小运行 ID。
-- 功能/最小过滤包含 `0x082` 和 `0x339`，避免漏掉电池预热监控和 VCSEC 维修/状态帧。
+  - `0`：抓包调试，接收全部标准帧。
+  - `1`：当前功能相关 ID。
+- 功能相关过滤包含 `0x082`、`0x339` 和 `0x3C2`，避免漏掉电池预热、VCSEC 维修/状态帧和滚轮免打扰帧。旧保存值 `2` 会自动映射为功能相关过滤。
 
 已实现的 `bus=2` 功能：
 
@@ -361,36 +385,60 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 - **后雾灯减速爆闪（`0x273`）**：启用后，缓减速触发 3 次，急减速触发 5 次，节奏 500 ms。
 - **倒车双闪 + 后雾灯爆闪**：启用后，`bus=1` `0x118` 倒挡，或刹车 + `bus=2` `0x3C2` 右滚轮向后，触发双闪和后雾灯脉冲。
 - **滚轮换挡注入（`0x229`）**：实验功能，默认关闭。踩刹车时，右滚轮向后请求 R，向前请求 D。只有 FSD 注入关闭，或最新 `0x399 DAS_autopilotState` 处于正常/非接管状态（`0=DISABLED`、`1=UNAVAILABLE`、`2=AVAILABLE`）时才允许注入；AP/FSD active 状态会阻止注入。
-- **电池预热（`0x082`）**：启用后，每 200 ms 在 `bus=2` 发送动态 `UI_tripPlanning`。
-- **锁车触发 deep sleep**：启用后，只识别 `0x273 UI_lockRequest = LOCK/REMOTE_LOCK`，禁止所有 CAN TX、关闭 WiFi/TWAI，并进入 ESP32 deep sleep。`0x339` 不再单独触发休眠。
+- **电池预热（`0x082`）**：启用后，每 500 ms 在 `bus=2` 固定发送 `AF 50 94 39 FF 03 83 05`。
+- **音量免打扰（`0x399` + `0x3C2`）**：默认关闭。`0x399` 显示 AP/FSD active 后，随机 1-5 秒在 `bus=2` `0x3C2` 发送四步左滚轮音量加减序列。
+- **Nag-Killer 扭矩免打扰（`0x052` / `0x370`）**：实验功能，默认关闭。Mode B 对 `0x052` 做 burst/pause 扭矩循环；Mode C 对 `0x370` 做 hands-on 状态机。
+- **锁车触发 deep sleep**：启用后，仍只把 `0x339 VCSEC 简化锁状态 = 2（锁定）` 作为锁车触发来源，但必须连续稳定 5 秒，并且座椅/驾驶员状态确认车内无人后，才禁止所有 CAN TX、关闭 WiFi/TWAI，并进入 ESP32 deep sleep。简化状态 `1` 解码为解锁，会重置计时。
 
 ### 电池预热细节
 
-固件缓存最新有效原车 `0x082` 上下文字段 `byte1..7`，只覆盖 `byte0`。
+固件使用实车验证有效的固定 `0x082` payload。旧动态模板发送器和 `0x08B/0x495/0x496/0x497` 帧组仿制发送器已删除。
 
-- 当前 fallback/context：`01 50 AC 32 FF 03 61 15`。
-- WebUI ON 帧：`AF 50 AC 32 FF 03 61 15`。
-- WebUI OFF 使用 byte0 `0x01`，并在停止前补发数帧 OFF。
+- WebUI ON 帧：`AF 50 94 39 FF 03 83 05`。
+- WebUI OFF 帧：`01 50 94 39 FF 03 83 05`，停止前补发数帧。
+- WebUI 诊断显示预热发送状态、TX 计数、距上次发送时间、`0x082` 反馈解码、预热功率、目标/环境温度和到达能量，均以易读十进制显示。
+- WebUI 电池温度会把有效 `0x712` mux 0..3 候选温度解码成十进制摄氏度，并显示最新 mux 以及最低/平均/最高温度。
+- BMS 温度候选帧诊断仍覆盖 `0x312`、`0x712`、`0x374`。
 
-WebUI 诊断会解码：
+测试 BMS 温度诊断时，请把 MCP2515 硬件过滤设为抓包调试，因为 `0x712` 和其他 BMS 候选 ID 不在当前功能相关过滤集合里。
 
-- 请求位和状态位，
-- 功率请求，
-- 目标温度，
-- 目的地环境温度，
-- 充电目标，
-- 到达能量 raw 值，
-- BMS 温度候选帧 `0x312`、`0x712`、`0x374`。
+### 音量免打扰
 
-测试 BMS 温度诊断时，请把 MCP2515 硬件过滤设为接收全部，因为这些 BMS 候选 ID 不在功能/最小过滤集合里。
+免打扰只实现音量滚轮动作，不注入方向盘扭矩。
+
+- 状态来源：`bus=1` / TWAI / 物理 CANB，`0x399`。
+- 音量触发：`0x399` 显示 AP/FSD active 后，随机 1-5 秒自动重复一次。
+- 输出路径：`bus=2` / MCP2515 / 物理 CANA，复用最新原车 `0x3C2` mux1 滚轮帧。
+- 音量动作：`data[2] = 0x01 -> 0x00 -> 0x3F -> 0x00`。
+- 步进间隔：50 ms。
+
+固件要求先收到新鲜的 `0x3C2` mux1 缓存才会发送免打扰帧。当前实车抓包显示 `data[2]` 变化时，滚轮帧的校验/计数字节保持稳定，所以实现方式为复制原车实时帧，只修改左滚轮 tick 字节。
+
+### Nag-Killer 扭矩免打扰
+
+此功能为实验功能，默认关闭。它使用 `bus=1` / TWAI / 物理 CANB，所有发送都经过现有 `twai_send()`，因此打开 `can1ReceiveOnly` 会阻止扭矩 TX。
+
+- Mode B 目标：`0x052`；要求新鲜的 `0x399` 且 AP/FSD active。默认 1000 ms 注入、1500 ms 休息；注入窗口内循环 WebUI 扭矩点，默认 `+1.80`、`+1.50`、`-1.50`、`-1.80` Nm，并设置 handsOn。
+- Mode C 目标：`0x370`；要求新鲜的 `0x399` 和 `0x129` 转角。hands-on 状态使用 `0x399 data[5] >> 2 & 0x0F`；状态 2 等待 2 秒后轻微随机扭矩，状态 3 等待 1 秒后按 WebUI 可调范围扫动，默认 `-1.8..+1.8 Nm`。
+- WebUI 扭矩框都填写 `0..2.8 Nm` 的幅值；每个输入框左侧固定的 `+` / `-` 标识决定实际正负号。
+- 两种模式都会复制原车目标帧，只修改扭矩字节，必要时设置 `data[4]` bit6 handsOn，递增 `data[6]` 低 4 位 counter，并按 `sum(data[0..6]) + 0x73` 重算 checksum。
 
 ### 锁车 Deep Sleep
 
-WebUI 启用后，锁车休眠只参考 `bus=2` / MCP2515 / 物理 CANA：
+WebUI 启用后，锁车触发路径仍只参考 `bus=2` / MCP2515 / 物理 CANA：
 
-- `0x273` lock request 值 `1` 或 `4`。
+- `0x339` VCSEC 简化锁状态，bit `54..55`。
+- 值 `2` 表示锁车候选，必须连续稳定 5 秒。
+- 值 `1` 表示解锁，会重置稳定计时。
 
-`0x339` VCSEC authentication/status 仍可用于维修/状态处理，但不再作为单独休眠触发源。
+车内无人依据来自：
+
+- `bus=1` / TWAI `0x3A1`：驾驶员存在 bit 7、乘客存在 bit 8，以及可见时的后排“有人且未系安全带”提示。
+- `bus=2` / MCP2515 `0x3C2` mux0：驾驶位和后排座椅占用开关值（`1=空座`，`2=有人`）。
+
+只有 `0x339=2` 连续稳定，且缓存的座椅/驾驶员状态判断车内无人，才请求 deep sleep。
+
+旧的 `0x273` UI 锁车请求和 `0x3F5` 灯光反馈休眠诊断已从固件/WebUI 路径删除。
 
 识别到有效锁车信号后：
 
@@ -400,7 +448,7 @@ WebUI 启用后，锁车休眠只参考 `bus=2` / MCP2515 / 物理 CANA：
 - 停止并卸载 TWAI，
 - ESP32 进入 deep sleep。
 
-没有移植座椅、EPAS 或通用超时休眠判断。车载 USB 供电安装场景下，预期唤醒方式是 USB 恢复供电后冷启动。
+没有移植 EPAS 或通用超时休眠判断。车载 USB 供电安装场景下，预期唤醒方式是 USB 恢复供电后冷启动。
 
 ### WebUI
 
@@ -425,6 +473,7 @@ WebUI 提供：
 - 灯光/爆闪功能，
 - 滚轮换挡注入，
 - 电池预热，
+- 音量免打扰，
 - 锁车 deep sleep，
 - TWAI 只收不发模式，
 - 状态计数器，

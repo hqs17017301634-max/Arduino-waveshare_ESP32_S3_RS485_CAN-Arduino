@@ -12,6 +12,7 @@ h1{font-size:18px;margin:0 0 12px}h2{font-size:15px;margin:0 0 8px;color:#8cf}h3
 label{display:flex;justify-content:space-between;align-items:center;margin:6px 0;font-size:14px;gap:12px}
 input[type=number]{width:90px;background:#222;color:#eee;border:1px solid #444;border-radius:4px;padding:3px}
 input[type=text],select{width:100%;box-sizing:border-box;background:#222;color:#eee;border:1px solid #444;border-radius:4px;padding:6px;margin-top:4px}
+.signed{display:flex;align-items:center;gap:6px;color:#eee}.signed b{min-width:10px;text-align:right}.signed em{font-style:normal;color:#aaa;font-size:12px}
 button{background:#2a6;color:#fff;border:0;border-radius:6px;padding:8px 12px;margin:4px 4px 0 0;font-size:14px}
 button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display:none;color:#fff;text-decoration:none;border-radius:6px;padding:8px 12px;margin:4px 4px 0 0}
 .kv{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #262626;gap:12px}.kv span:last-child{color:#9f9;font-variant-numeric:tabular-nums;text-align:right}
@@ -59,21 +60,46 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 </div>
 
 <div class="card">
+<h2>免打扰</h2>
+<label>免打扰总开关<input type="checkbox" id="dndEnabled"></label>
+<label>音量免打扰<input type="checkbox" id="dndVolumeEnabled"></label>
+<p class="hint">FSD/AP 激活后随机 1-5 秒自动音量加减恢复；每步 50ms。发送复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，默认关闭。</p>
+</div>
+
+<div class="card">
+<h2>Nag-Killer 扭矩</h2>
+<label>扭矩免打扰总开关<input type="checkbox" id="nagKillerEnabled"></label>
+<label>座舱摄像头关闭<input type="checkbox" id="cabinCameraDisableEnabled"></label>
+<label>座舱摄像头关闭遥测<input type="checkbox" id="cabinCameraTelemetryDisableEnabled"></label>
+<p class="hint">两个座舱摄像头开关走 bus=1/TWAI/物理CANB 的 0x3FD mux1；启用时只写对应 bit 为 0，未启用时不修改对应 bit。</p>
+<label>方案<select id="nagKillerMode"><option value="1">Mode B：0x052 burst/pause</option><option value="2">Mode C：0x370 hands-on状态机</option></select></label>
+<label>Mode B 注入窗口 ms<input type="number" id="nagKillerBurstMs" min="50" max="10000"></label>
+<label>Mode B 休息窗口 ms<input type="number" id="nagKillerPauseMs" min="0" max="10000"></label>
+<h3>Mode B 扭矩 Nm</h3>
+<label>第1正扭矩<span class="signed"><b>+</b><input type="number" id="nagKillerBPos1Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
+<label>第2正扭矩<span class="signed"><b>+</b><input type="number" id="nagKillerBPos2Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
+<label>第1负扭矩<span class="signed"><b>-</b><input type="number" id="nagKillerBNeg1Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
+<label>第2负扭矩<span class="signed"><b>-</b><input type="number" id="nagKillerBNeg2Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
+<h3>Mode C 扭矩 Nm</h3>
+<label>负端<span class="signed"><b>-</b><input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
+<label>正端<span class="signed"><b>+</b><input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
+<p class="hint">默认关闭。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 bus=1/TWAI 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370 做 hands-on 状态机，要求 0x399 和 0x129 均 1 秒内新鲜。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
+</div>
+
+<div class="card">
 <h2>滚轮换挡 / 预热 / MCP2515</h2>
 <label>滚轮换挡启用<input type="checkbox" id="scrollGearInjectEnabled"></label>
 <p class="hint">踩刹车 + 右滚轮，bus=2/MCP2515/物理CANA 发送 0x229，默认关闭。</p>
 <label>电池预热启用<input type="checkbox" id="batteryPreheatEnabled"></label>
-<p class="hint">当前固件：bus=2/MCP2515/物理CANA 每 200ms 发送动态 0x082；复用最新有效原车背景字段，只覆盖预热请求位。BMS 温度帧诊断需要硬件过滤设为“接收全部”。</p>
-<label>导航预热帧组仿制 EXP<input type="checkbox" id="batteryPreheatReplayEnabled"></label>
-<p class="hint">实验：bus=2/MCP2515 发送 0x082/0x08B/0x495/0x496/0x497；开启时固件会强制 MCP2515 接收全部，以便缓存真实导航伴随帧。</p>
+<p class="hint">bus=2/MCP2515/物理CANA 每 500ms 固定发送 0x082：AF 50 94 39 FF 03 83 05；温度显示依赖 0x712，测试时建议硬件过滤选“抓包调试”。</p>
 <label>锁车深度休眠<input type="checkbox" id="lockDeepSleepEnabled"></label>
-<p class="hint">开启后，bus=2/MCP2515/物理CANA 仅识别 0x273 UI_lockRequest=LOCK/REMOTE_LOCK，即停止所有 CAN 发送并进入 ESP32 deep sleep；0x339 只保留为维修/状态相关帧，不再单独触发休眠。</p>
+<p class="hint">开启后，需车内无人，且 bus=2/MCP2515/物理CANA 的 0x339 VCSEC 简化锁状态=2 连续稳定 5 秒，才停止所有 CAN 发送并进入 ESP32 deep sleep；状态=1 解锁会重置计时。</p>
 <label>bus=1/TWAI/物理CANB 只收不发<input type="checkbox" id="can1ReceiveOnly"></label>
 <p class="hint">开启后只屏蔽 TWAI 发送；MCP2515/物理CANA 上的灯光、滚轮和 0x082 不受这个开关阻断。</p>
 <h3>MCP2515 / 物理 CANA</h3>
 <label>启用<input type="checkbox" id="canbEnabled"></label>
 <label>维修模式 0x339<input type="checkbox" id="canbServiceModeEnabled"></label>
-<label>硬件过滤模式<select id="canbFilterMode"><option value="0">接收全部：调试/抓包</option><option value="1">功能相关 ID：含 0x082</option><option value="2">最小运行 ID</option></select></label>
+<label>硬件过滤模式<select id="canbFilterMode"><option value="0">抓包调试</option><option value="1">当前功能相关ID</option></select></label>
 </div>
 
 <div class="card">
@@ -113,26 +139,37 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>高光爆闪 / 剩余</span><span><b id="highBeamStrobeActive">-</b> / <b id="highBeamStrobeRemaining">-</b></span></div>
 <div class="kv"><span>后雾灯爆闪 / 剩余</span><span><b id="rearFogBrakeStrobeActive">-</b> / <b id="rearFogBrakeStrobeRemaining">-</b></span></div>
 <div class="kv"><span>倒挡爆闪 / 剩余</span><span><b id="reverseStrobeActive">-</b> / <b id="reverseStrobeRemaining">-</b></span></div>
+<h3>电池预热 / 温度</h3>
 <div class="kv"><span>电池预热发送中</span><span id="batteryPreheatActive">-</span></div>
-<div class="kv"><span>0x082反馈 / 距今ms</span><span><b id="batteryPreheatVehicleSeen">-</b> / <b id="batteryPreheatVehicleAgeMs">-</b></span></div>
-<div class="kv"><span>0x082请求/状态/模板</span><span><b id="batteryPreheatUiRequestHeat">-</b> / <b id="batteryPreheatUiState">-</b> / <b id="batteryPreheatTemplateValid">-</b></span></div>
-<div class="kv"><span>导航超充/快充类型/行程</span><span><b id="batteryPreheatUiNavToSupercharger">-</b> / <b id="batteryPreheatUiFastChargerType">-</b> / <b id="batteryPreheatUiTripActive">-</b></span></div>
-<div class="kv"><span>功率/目标温度/目的地温度</span><span><b id="batteryPreheatUiPowerW">-</b> / <b id="batteryPreheatUiTargetCx100">-</b> / <b id="batteryPreheatUiAmbientCx100">-</b></span></div>
-<div class="kv"><span>充电目标/到达能量</span><span><b id="batteryPreheatUiChargeTargetCx10">-</b> / <b id="batteryPreheatUiEnergyAtDestination">-</b></span></div>
-<div class="kv"><span>预热帧组仿制 / 缓存mask</span><span><b id="batteryPreheatReplayActive">-</b> / <b id="batteryPreheatReplayCachedMask">-</b></span></div>
-<div class="kv"><span>预热帧组TX / 距今ms</span><span><b id="batteryPreheatReplayTxCount">-</b> / <b id="batteryPreheatReplayAgeMs">-</b></span></div>
-<div class="kv"><span>BMS温度帧 / bus / 距今ms</span><span><b id="bmsTempFrameSeen">-</b> / <b id="bmsTempFrameBus">-</b> / <b id="bmsTempFrameAgeMs">-</b></span></div>
-<div class="kv"><span>BMS温度ID / mux / raw</span><span><b id="bmsTempFrameId">-</b> / <b id="bmsTempFrameMux">-</b> / <b id="bmsTempFramePayload">-</b></span></div>
-<div class="kv"><span>0x712温度原始组</span><span id="bms712Raw">-</span></div>
+<div class="kv"><span>电池预热TX / 距今ms</span><span><b id="batteryPreheatTxCount">-</b> / <b id="batteryPreheatAgeMs">-</b></span></div>
+<div class="kv"><span>0x082反馈 / bus / 距今ms</span><span><b id="batteryPreheatFeedbackSeen">-</b> / <b id="batteryPreheatFeedbackBus">-</b> / <b id="batteryPreheatFeedbackAgeMs">-</b></span></div>
+<div class="kv"><span>预热状态 / 请求加热</span><span><b id="batteryPreheatUiState">-</b> / <b id="batteryPreheatUiRequestHeat">-</b></span></div>
+<div class="kv"><span>导航快充 / 类型 / 行程</span><span><b id="batteryPreheatUiNavToSupercharger">-</b> / <b id="batteryPreheatUiFastChargerType">-</b> / <b id="batteryPreheatUiTripActive">-</b></span></div>
+<div class="kv"><span>预热功率 / 目标温度</span><span><b id="batteryPreheatUiPowerW">-</b> / <b id="batteryPreheatUiTargetCx100">-</b></span></div>
+<div class="kv"><span>环境温度 / 到达能量</span><span><b id="batteryPreheatUiAmbientCx100">-</b> / <b id="batteryPreheatUiEnergyAtDestination">-</b></span></div>
+<div class="kv"><span>电池温度 最低/平均/最高</span><span><b id="bmsTempMinCx100">-</b> / <b id="bmsTempAvgCx100">-</b> / <b id="bmsTempMaxCx100">-</b></span></div>
+<div class="kv"><span>最新0x712 mux / T1/T2/T3</span><span><b id="bmsTempDecodedMux">-</b> / <b id="bmsTempLatest1Cx100">-</b> / <b id="bmsTempLatest2Cx100">-</b> / <b id="bmsTempLatest3Cx100">-</b></span></div>
+<div class="kv"><span>温度点数 / 距今ms</span><span><b id="bmsTempDecodedCount">-</b> / <b id="bmsTempDecodedAgeMs">-</b></span></div>
+<div class="kv"><span>温度帧ID / raw</span><span><b id="bmsTempFrameId">-</b> / <b id="bmsTempFramePayload">-</b></span></div>
+<div class="kv"><span>0x082 raw</span><span id="batteryPreheatFeedbackPayload">-</span></div>
+<h3>免打扰</h3>
+<div class="kv"><span>hands-on 0x399 / 警告</span><span><b id="dndHandsOnState">-</b> / <b id="dndWarningActive">-</b></span></div>
+<div class="kv"><span>动作 / 类型 / 阻止</span><span><b id="dndActionActive">-</b> / <b id="dndActionType">-</b> / <b id="dndBlocked">-</b></span></div>
+<div class="kv"><span>DND TX / 触发距今ms</span><span><b id="dndTxCount">-</b> / <b id="dndLastTriggerAgeMs">-</b></span></div>
+<div class="kv"><span>0x3C2滚轮缓存距今ms</span><span id="dndScrollCacheAgeMs">-</span></div>
+<h3>Nag-Killer 扭矩</h3>
+<div class="kv"><span>模式 / 目标ID / 阻止</span><span><b id="nagKillerModeText">-</b> / <b id="nagKillerTargetId">-</b> / <b id="nagKillerBlocked">-</b></span></div>
+<div class="kv"><span>激活 / burst / setHo</span><span><b id="nagKillerActive">-</b> / <b id="nagKillerBurstActive">-</b> / <b id="nagKillerSetHandsOn">-</b></span></div>
+<div class="kv"><span>RX / TX / fail</span><span><b id="nagKillerRxCount">-</b> / <b id="nagKillerTxCount">-</b> / <b id="nagKillerTxFail">-</b></span></div>
+<div class="kv"><span>RX距今 / TX距今ms</span><span><b id="nagKillerLastRxAgeMs">-</b> / <b id="nagKillerLastTxAgeMs">-</b></span></div>
+<div class="kv"><span>AP / hands-on / 目标Ho</span><span><b id="nagKillerApState">-</b> / <b id="nagKillerHandsOnState">-</b> / <b id="nagKillerTargetHandsOn">-</b></span></div>
+<div class="kv"><span>实车扭矩 / 注入扭矩</span><span><b id="nagKillerRealTorqueCx100">-</b> / <b id="nagKillerLastTorqueCx100">-</b></span></div>
+<div class="kv"><span>方向盘角度 / AP年龄 / 转角年龄</span><span><b id="nagKillerSteeringDegCx10">-</b> / <b id="nagKillerApAgeMs">-</b> / <b id="nagKillerSteeringAgeMs">-</b></span></div>
 <div class="kv"><span>锁车休眠 / 来源 / 距今ms</span><span><b id="lockSleepTriggered">-</b> / <b id="lockSleepSource">-</b> / <b id="lockSleepAgeMs">-</b></span></div>
 <div class="kv"><span>锁车休眠最后ID / 已启用</span><span><b id="lockSleepLastId">-</b> / <b id="lockSleepArmed">-</b></span></div>
-<div class="kv"><span>0x273 UI锁车请求 / 命中</span><span><b id="lockSleep273Request">-</b> / <b id="lockSleep273Matched">-</b></span></div>
-<div class="kv"><span>0x273 收到 / 距今ms / raw</span><span><b id="lockSleep273Seen">-</b> / <b id="lockSleep273AgeMs">-</b> / <b id="lockSleep273Payload">-</b></span></div>
-<div class="kv"><span>0x339 VCSEC简化锁状态</span><span><b id="lockSleep339SimpleStatus">-</b></span></div>
-<div class="kv"><span>0x339 VCSEC车辆锁状态</span><span><b id="lockSleep339VehicleStatus">-</b></span></div>
-<div class="kv"><span>0x339 收到 / 距今ms / raw</span><span><b id="lockSleep339Seen">-</b> / <b id="lockSleep339AgeMs">-</b> / <b id="lockSleep339Payload">-</b></span></div>
-<div class="kv"><span>0x3F5 灯光锁车反馈</span><span><b id="lockSleep3F5HazardRequest">-</b></span></div>
-<div class="kv"><span>0x3F5 收到 / 距今ms / raw</span><span><b id="lockSleep3F5Seen">-</b> / <b id="lockSleep3F5AgeMs">-</b> / <b id="lockSleep3F5Payload">-</b></span></div>
+<div class="kv"><span>0x339 简化锁状态 / 距今ms</span><span><b id="lockSleep339SimpleStatus">-</b> / <b id="lockSleep339AgeMs">-</b></span></div>
+<div class="kv"><span>车内无人 / 0x339稳定ms / 阻止</span><span><b id="lockSleepCabinEmpty">-</b> / <b id="lockSleep339StableAgeMs">-</b> / <b id="lockSleepBlocked">-</b></span></div>
+<div class="kv"><span>0x339 收到</span><span id="lockSleep339Seen">-</span></div>
 <h3>滚轮换挡</h3>
 <div class="kv"><span>当前挡位 0x118</span><span id="currentGear">-</span></div>
 <div class="kv"><span>DAS AP state 0x399</span><span id="dasAutopilotState">-</span></div>
@@ -147,32 +184,41 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 
 <script>
 let pollTimer=null,recTimer=null,loaded=false;
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","batteryPreheatReplayEnabled","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
-const stats=["can1Rx","can1Tx","can1TxFail","twaiState","twaiBusOffCount","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","batteryPreheatActive","batteryPreheatVehicleSeen","batteryPreheatVehicleAgeMs","batteryPreheatTemplateValid","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatReplayActive","batteryPreheatReplayCachedMask","batteryPreheatReplayTxCount","batteryPreheatReplayAgeMs","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep273Seen","lockSleep273Request","lockSleep273Matched","lockSleep273AgeMs","lockSleep273Payload","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339VehicleStatus","lockSleep339AgeMs","lockSleep339Payload","lockSleep3F5Seen","lockSleep3F5HazardRequest","lockSleep3F5AgeMs","lockSleep3F5Payload","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","cabinCameraTelemetryDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","dndVolumeEnabled","nagKillerEnabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
+const stats=["can1Rx","can1Tx","can1TxFail","twaiState","twaiBusOffCount","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","batteryPreheatActive","batteryPreheatTxCount","batteryPreheatAgeMs","batteryPreheatFeedbackSeen","batteryPreheatFeedbackBus","batteryPreheatFeedbackAgeMs","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatFeedbackPayload","dndHandsOnState","dndWarningActive","dndActionActive","dndActionType","dndBlocked","dndTxCount","dndLastTriggerAgeMs","dndScrollCacheAgeMs","nagKillerMode","nagKillerActive","nagKillerBlocked","nagKillerBurstActive","nagKillerTargetId","nagKillerRxCount","nagKillerTxCount","nagKillerTxFail","nagKillerLastRxAgeMs","nagKillerLastTxAgeMs","nagKillerApAgeMs","nagKillerSteeringAgeMs","nagKillerApState","nagKillerHandsOnState","nagKillerTargetHandsOn","nagKillerSetHandsOn","nagKillerRealTorqueCx100","nagKillerLastTorqueCx100","nagKillerSteeringDegCx10","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","bmsTempDecodedSeen","bmsTempDecodedMux","bmsTempDecodedCount","bmsTempDecodedAgeMs","bmsTempLatest1Cx100","bmsTempLatest2Cx100","bmsTempLatest3Cx100","bmsTempMinCx100","bmsTempAvgCx100","bmsTempMaxCx100","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339AgeMs","lockSleepCabinEmpty","lockSleep339StableAgeMs","lockSleepBlocked","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
+const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else e.value=v;}
 function getVal(e){return e.type==="checkbox"?(e.checked?1:0):e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
+function yesNo(v){return v?"是":"否"}
+function cx100(v){return v<=-32000?"-":(v/100).toFixed(2)+" ℃"}
 function fmtStat(k,v){
-if(k==="canbLastId"||k==="canbErrorFlags"||k==="bmsTempFrameId"||k==="lockSleepLastId")return "0x"+(v>>>0).toString(16).toUpperCase();
-if(k==="lockSleepSource")return v===1?"0x273":v;
-if(k==="lockSleep273Request"){if(v===1)return "1 LOCK";if(v===4)return "4 REMOTE_LOCK";if(v===255)return "未解码";return v}
-if(k==="lockSleep273Matched")return v?"命中":"未命中";
+if(k==="canbLastId"||k==="canbErrorFlags"||k==="bmsTempFrameId"||k==="lockSleepLastId"||k==="nagKillerTargetId")return "0x"+(v>>>0).toString(16).toUpperCase();
+if(k==="batteryPreheatActive"||k==="batteryPreheatFeedbackSeen"||k==="bmsTempFrameSeen"||k==="bmsTempDecodedSeen")return yesNo(v);
+if(k==="batteryPreheatFeedbackBus")return v===1?"bus=1":(v===2?"bus=2":v);
+if(k==="batteryPreheatUiTripActive"||k==="batteryPreheatUiNavToSupercharger"||k==="batteryPreheatUiRequestHeat")return yesNo(v);
+if(k==="batteryPreheatUiFastChargerType")return v===3?"V3":(v===0?"无":v);
+if(k==="batteryPreheatUiState")return ["空闲","主动加热","状态2","状态3"][v]||v;
+if(k==="batteryPreheatUiPowerW")return v<=-32000?"-":(v+" W");
+if(k==="batteryPreheatUiTargetCx100"||k==="batteryPreheatUiAmbientCx100"||k==="bmsTempLatest1Cx100"||k==="bmsTempLatest2Cx100"||k==="bmsTempLatest3Cx100"||k==="bmsTempMinCx100"||k==="bmsTempAvgCx100"||k==="bmsTempMaxCx100")return cx100(v);
+if(k==="batteryPreheatUiChargeTargetCx10")return v<=-32000?"-":(v/10).toFixed(1)+" ℃";
+if(k==="batteryPreheatUiEnergyAtDestination")return v<=-32000?"-":v;
+if(k==="bmsTempDecodedMux")return v===255?"-":("mux "+v);
+if(k==="lockSleepSource")return v===1?"0x339":v;
 if(k==="lockSleep339SimpleStatus"){if(v===0)return "0 SNA";if(v===1)return "1 解锁";if(v===2)return "2 锁定";if(v===255)return "未解码";return v}
-if(k==="lockSleep339VehicleStatus"){
-const m={0:"0 SNA",1:"1 NFC解锁",2:"2 NFC锁定",3:"3 被动选择解锁",4:"4 BLE解锁",5:"5 BLE锁定",6:"6 主动选择解锁",7:"7 主动BLE解锁",8:"8 主动BLE锁定",9:"9 UI解锁",10:"10 UI锁定",11:"11 远程解锁",12:"12 远程锁定",13:"13 碰撞解锁",14:"14 内部被动解锁",15:"15 内部被动锁定",255:"未解码"};return m[v]||v}
-if(k==="lockSleep3F5HazardRequest"){
-const m={0:"0 无",1:"1 按钮双闪",2:"2 锁车灯光",3:"3 解锁灯光",4:"4 未锁好",5:"5 碰撞",6:"6 防盗报警",7:"7 DAS",8:"8 诊断",255:"未解码"};return m[v]||v}
-if(k==="batteryPreheatUiPowerW")return v===-32768?"SNA":(v+" W");
-if(k==="batteryPreheatUiTargetCx100"||k==="batteryPreheatUiAmbientCx100")return v===-32768?"SNA":((v/100).toFixed(2)+" C");
-if(k==="batteryPreheatUiChargeTargetCx10")return v===-32768?"SNA":((v/10).toFixed(1)+" %");
-if(k==="batteryPreheatUiEnergyAtDestination")return v===-32768?"SNA":v;
-if(k==="batteryPreheatUiState")return ["被动加热","主动加热","被动冷却","主动冷却"][v]||v;
-if(k==="batteryPreheatUiFastChargerType")return ["无","低功率","V2","V3","V4"][v]||v;
+if(k==="lockSleepCabinEmpty")return yesNo(v);
+if(k==="lockSleepBlocked")return ["ok","未锁/解锁","车内有人/未确认无人","0x339稳定中"][v]||v;
+if(k==="dndActionType")return ["none","volume"][v]||v;
+if(k==="dndBlocked")return ["ok","disabled","canb","no_cache"][v]||v;
+if(k==="nagKillerMode")return ["","Mode B","Mode C"][v]||v;
+if(k==="nagKillerBlocked")return ["ok","disabled","bad_mode","ap_state","target_ho","rest","stale_0x399","stale_0x129","steer_angle","hands_state","tx_blocked","bad_dlc"][v]||v;
+if(k==="nagKillerActive"||k==="nagKillerBurstActive"||k==="nagKillerSetHandsOn")return yesNo(v);
+if(k==="nagKillerRealTorqueCx100"||k==="nagKillerLastTorqueCx100")return v<=-32000?"-":(v/100).toFixed(2)+" Nm";
+if(k==="nagKillerSteeringDegCx10")return v<=-32000?"-":(v/10).toFixed(1)+"°";
 if(k==="dasAutopilotState")return ["DISABLED","UNAVAILABLE","AVAILABLE","ACTIVE_NOMINAL","ACTIVE_RESTRICTED","ACTIVE_NAV","ACTIVE_FSD"][v]||v;
 if(k==="scrollGearInjectBlocked")return ["ok","bad_target","brake","speed","same_gear","cooldown","ap_state"][v]||v;
 return v}
-function updateBms712(j){const e=document.getElementById("bms712Raw");if(!e)return;if((j.bmsTempFrameId>>>0)!==0x712){e.textContent="未收到0x712";return}const p=(j.bmsTempFramePayload||"").split(" ");e.textContent="mux "+j.bmsTempFrameMux+" / b1-b7 "+p.slice(1).join(" ")}
-function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{stats.forEach(k=>{const e=document.getElementById(k);if(e&&k in j)e.textContent=fmtStat(k,j[k])});updateBms712(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
+function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{stats.forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&k in j)e.textContent=fmtStat(k,j[k])});if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);p.set(k,getVal(e))});return p}
 function applyConfig(){fetch("/config",{method:"POST",body:body()}).then(async r=>{showResult(await r.text());pollStatus()})}
