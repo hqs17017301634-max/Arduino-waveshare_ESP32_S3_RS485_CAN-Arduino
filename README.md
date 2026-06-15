@@ -160,10 +160,13 @@ The firmware requires a fresh live `0x3C2` mux1 cache before sending DND frames.
 This feature is experimental and defaults off. It uses `bus=1` / TWAI / physical CANB and always sends through the normal `twai_send()` gate, so `can1ReceiveOnly` blocks its TX.
 
 - Mode B target: `0x052`; requires fresh `0x399` AP/FSD active state. Default cadence is 1000 ms injection and 1500 ms rest. During injection it cycles the WebUI torque points, defaulting to `+1.80`, `+1.50`, `-1.50`, `-1.80` Nm, and sets handsOn.
-- Mode C target: `0x370`; requires fresh `0x399` plus fresh `0x129` steering angle. It uses `0x399 data[5] >> 2 & 0x0F` for hands-on state, waits 2 s in state 2 before mild random-walk torque, and waits 1 s in state 3 before a WebUI-configurable sweep, defaulting to `-1.8..+1.8 Nm`.
+- Mode C target: `0x370`; requires fresh `0x399` and AP/FSD active. For the first 5 s after AP/FSD becomes active it behaves like Mode A: fixed `+1.80 Nm` with HandsOnLevel `L1`. After that startup window it requires fresh `0x129`, uses `0x399 data[5] >> 2 & 0x0F` for hands-on state, waits 2 s in state 2 before mild random-walk torque, and waits 1 s in state 3 before a WebUI-configurable sweep, defaulting to `-1.8..+1.8 Nm`.
+- Mode D target: `0x370`; implements the imported document state machine while keeping this car's `0x399` context source. State 1 holds the previous synthetic torque/HandsOnLevel for 500 ms, state 2 waits 2 s then random-walks `0.5..2.0 Nm`, and states 3/4/5 wait 1 s then ramp/hold to `2.1 Nm`.
 - `0x129` steering angle follows the DBC signal `SCCM_steeringAngle : 16|14@1+ (0.1,-819.2)`, so the firmware decodes the low 14 bits from `data[2..3]`.
 - WebUI torque fields all take magnitude values from `0..2.8 Nm`; the fixed `+` / `-` marker beside each field decides the actual sign.
-- Both modes copy the live target frame, modify torque bytes, optionally set handsOn bit 6 in `data[4]`, increment the low-nibble counter in `data[6]`, and recalculate checksum as `sum(data[0..6]) + 0x73`.
+- WebUI also has independent `0x052` and `0x370` torque-send test switches. When enabled, the firmware sends the configured torque on every matching live target frame without waiting for AP state, hands-on state, steering angle, or burst/rest timing. It still copies the live target frame and still goes through `twai_send()`, so `can1ReceiveOnly` blocks test TX too.
+- Bus=1 software filtering includes `0x313` for EPAS/Nag-Killer capture diagnostics.
+- All modes copy the live target frame, modify torque bytes, update HandsOnLevel in `data[4]` when needed, increment the low-nibble counter in `data[6]`, and recalculate checksum as `sum(data[0..6]) + 0x73`.
 
 ### Lock Deep Sleep
 
@@ -419,9 +422,12 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 此功能为实验功能，默认关闭。它使用 `bus=1` / TWAI / 物理 CANB，所有发送都经过现有 `twai_send()`，因此打开 `can1ReceiveOnly` 会阻止扭矩 TX。
 
 - Mode B 目标：`0x052`；要求新鲜的 `0x399` 且 AP/FSD active。默认 1000 ms 注入、1500 ms 休息；注入窗口内循环 WebUI 扭矩点，默认 `+1.80`、`+1.50`、`-1.50`、`-1.80` Nm，并设置 handsOn。
-- Mode C 目标：`0x370`；要求新鲜的 `0x399` 和 `0x129` 转角。hands-on 状态使用 `0x399 data[5] >> 2 & 0x0F`；状态 2 等待 2 秒后轻微随机扭矩，状态 3 等待 1 秒后按 WebUI 可调范围扫动，默认 `-1.8..+1.8 Nm`。
+- Mode C 目标：`0x370`；要求新鲜的 `0x399` 且 AP/FSD active。AP/FSD 进入 active 后前 5 秒按 Mode A 执行：固定 `+1.80 Nm` 并写 HandsOnLevel `L1`。5 秒启动窗口后要求新鲜的 `0x129` 转角，hands-on 状态使用 `0x399 data[5] >> 2 & 0x0F`；状态 2 等待 2 秒后轻微随机扭矩，状态 3 等待 1 秒后按 WebUI 可调范围扫动，默认 `-1.8..+1.8 Nm`。
+- Mode D 目标：`0x370`；实现导入文档的状态机，但状态来源仍使用本车验证过的 `0x399`。state 1 保持上次合成扭矩/HandsOnLevel 500 ms，state 2 等 2 秒后 `0.5..2.0 Nm` 随机游走，state 3/4/5 等 1 秒后 ramp/hold 到 `2.1 Nm`。
 - WebUI 扭矩框都填写 `0..2.8 Nm` 的幅值；每个输入框左侧固定的 `+` / `-` 标识决定实际正负号。
-- 两种模式都会复制原车目标帧，只修改扭矩字节，必要时设置 `data[4]` bit6 handsOn，递增 `data[6]` 低 4 位 counter，并按 `sum(data[0..6]) + 0x73` 重算 checksum。
+- WebUI 另有独立的 `0x052` 和 `0x370` 扭矩发送测试开关。打开后，收到对应原车目标帧就直接发送当前设置扭矩，不等待 AP 状态、hands-on 状态、方向盘角度或 burst/rest 时间窗口。测试仍然复制原车目标帧并经过 `twai_send()`，所以 `can1ReceiveOnly` 也会阻止测试 TX。
+- bus=1 软件过滤已包含 `0x313`，用于 EPAS / Nag-Killer 抓包诊断。
+- 所有模式都会复制原车目标帧，只修改扭矩字节，必要时更新 `data[4]` 的 HandsOnLevel，递增 `data[6]` 低 4 位 counter，并按 `sum(data[0..6]) + 0x73` 重算 checksum。
 
 ### 锁车 Deep Sleep
 

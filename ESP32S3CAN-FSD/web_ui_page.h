@@ -69,10 +69,12 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="card">
 <h2>Nag-Killer 扭矩</h2>
 <label>扭矩免打扰总开关<input type="checkbox" id="nagKillerEnabled"></label>
+<label>0x052 扭矩发送测试<input type="checkbox" id="nagKillerTest052Enabled"></label>
+<label>0x370 扭矩发送测试<input type="checkbox" id="nagKillerTest370Enabled"></label>
 <label>座舱摄像头关闭<input type="checkbox" id="cabinCameraDisableEnabled"></label>
 <label>座舱摄像头关闭遥测<input type="checkbox" id="cabinCameraTelemetryDisableEnabled"></label>
 <p class="hint">两个座舱摄像头开关走 bus=1/TWAI/物理CANB 的 0x3FD mux1；启用时只写对应 bit 为 0，未启用时不修改对应 bit。</p>
-<label>方案<select id="nagKillerMode"><option value="1">Mode B：0x052 burst/pause</option><option value="2">Mode C：0x370 hands-on状态机</option></select></label>
+<label>方案<select id="nagKillerMode"><option value="1">Mode B：0x052 burst/pause</option><option value="2">Mode C：0x370 hands-on状态机</option><option value="3">Mode D：文档0x370状态机</option></select></label>
 <label>Mode B 注入窗口 ms<input type="number" id="nagKillerBurstMs" min="50" max="10000"></label>
 <label>Mode B 休息窗口 ms<input type="number" id="nagKillerPauseMs" min="0" max="10000"></label>
 <h3>Mode B 扭矩 Nm</h3>
@@ -83,7 +85,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <h3>Mode C 扭矩 Nm</h3>
 <label>负端<span class="signed"><b>-</b><input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
 <label>正端<span class="signed"><b>+</b><input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<p class="hint">默认关闭。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 bus=1/TWAI 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370 做 hands-on 状态机，要求 0x399 和 0x129 均 1 秒内新鲜。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
+<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
 </div>
 
 <div class="card">
@@ -184,7 +186,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 
 <script>
 let pollTimer=null,recTimer=null,loaded=false;
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","cabinCameraTelemetryDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","dndVolumeEnabled","nagKillerEnabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","cabinCameraTelemetryDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","dndVolumeEnabled","nagKillerEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
 const stats=["can1Rx","can1Tx","can1TxFail","twaiState","twaiBusOffCount","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","batteryPreheatActive","batteryPreheatTxCount","batteryPreheatAgeMs","batteryPreheatFeedbackSeen","batteryPreheatFeedbackBus","batteryPreheatFeedbackAgeMs","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatFeedbackPayload","dndHandsOnState","dndWarningActive","dndActionActive","dndActionType","dndBlocked","dndTxCount","dndLastTriggerAgeMs","dndScrollCacheAgeMs","nagKillerMode","nagKillerActive","nagKillerBlocked","nagKillerBurstActive","nagKillerTargetId","nagKillerRxCount","nagKillerTxCount","nagKillerTxFail","nagKillerLastRxAgeMs","nagKillerLastTxAgeMs","nagKillerApAgeMs","nagKillerSteeringAgeMs","nagKillerApState","nagKillerHandsOnState","nagKillerTargetHandsOn","nagKillerSetHandsOn","nagKillerRealTorqueCx100","nagKillerLastTorqueCx100","nagKillerSteeringDegCx10","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","bmsTempDecodedSeen","bmsTempDecodedMux","bmsTempDecodedCount","bmsTempDecodedAgeMs","bmsTempLatest1Cx100","bmsTempLatest2Cx100","bmsTempLatest3Cx100","bmsTempMinCx100","bmsTempAvgCx100","bmsTempMaxCx100","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339AgeMs","lockSleepCabinEmpty","lockSleep339StableAgeMs","lockSleepBlocked","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else e.value=v;}
@@ -210,9 +212,10 @@ if(k==="lockSleepCabinEmpty")return yesNo(v);
 if(k==="lockSleepBlocked")return ["ok","未锁/解锁","车内有人/未确认无人","0x339稳定中"][v]||v;
 if(k==="dndActionType")return ["none","volume"][v]||v;
 if(k==="dndBlocked")return ["ok","disabled","canb","no_cache"][v]||v;
-if(k==="nagKillerMode")return ["","Mode B","Mode C"][v]||v;
+if(k==="nagKillerMode")return ["","Mode B","Mode C","Mode D"][v]||v;
 if(k==="nagKillerBlocked")return ["ok","disabled","bad_mode","ap_state","target_ho","rest","stale_0x399","stale_0x129","steer_angle","hands_state","tx_blocked","bad_dlc"][v]||v;
-if(k==="nagKillerActive"||k==="nagKillerBurstActive"||k==="nagKillerSetHandsOn")return yesNo(v);
+if(k==="nagKillerSetHandsOn")return v?("L"+v):"否";
+if(k==="nagKillerActive"||k==="nagKillerBurstActive")return yesNo(v);
 if(k==="nagKillerRealTorqueCx100"||k==="nagKillerLastTorqueCx100")return v<=-32000?"-":(v/100).toFixed(2)+" Nm";
 if(k==="nagKillerSteeringDegCx10")return v<=-32000?"-":(v/10).toFixed(1)+"°";
 if(k==="dasAutopilotState")return ["DISABLED","UNAVAILABLE","AVAILABLE","ACTIVE_NOMINAL","ACTIVE_RESTRICTED","ACTIVE_NAV","ACTIVE_FSD"][v]||v;

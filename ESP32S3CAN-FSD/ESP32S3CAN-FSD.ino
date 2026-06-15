@@ -137,6 +137,7 @@ constexpr uint8_t CANB_FILTER_ALL = 0;
 constexpr uint8_t CANB_FILTER_FEATURE = 1;
 constexpr uint8_t NAG_KILLER_MODE_B = 1;
 constexpr uint8_t NAG_KILLER_MODE_C = 2;
+constexpr uint8_t NAG_KILLER_MODE_DOC = 3;
 constexpr uint16_t NAG_KILLER_TORQUE_MAX_CX100 = 280; // 2.80 Nm
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_BASE = 2050;
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_MIN =
@@ -174,7 +175,9 @@ struct RuntimeConfig {
   bool dndEnabled = false;             // volume DND master switch
   bool dndVolumeEnabled = false;       // left scroll up/down on 0x3C2
   bool nagKillerEnabled = false;       // experimental steering torque echo
-  uint8_t nagKillerMode = NAG_KILLER_MODE_B; // 1=Mode B, 2=Mode C
+  bool nagKillerTest052Enabled = false; // force-send configured 0x052 torque on live target frames
+  bool nagKillerTest370Enabled = false; // force-send configured 0x370 torque on live target frames
+  uint8_t nagKillerMode = NAG_KILLER_MODE_B; // 1=Mode B, 2=Mode C, 3=doc state machine
   uint16_t nagKillerBurstMs = 1000;    // Mode B injection window
   uint16_t nagKillerPauseMs = 1500;    // Mode B rest window
   uint16_t nagKillerBPos1Cx100 = 180;  // Mode B + torque #1, centi-Nm
@@ -197,6 +200,7 @@ static uint8_t normalizeCanBFilterMode(uint8_t mode) {
 }
 
 static uint8_t normalizeNagKillerMode(uint8_t mode) {
+  if (mode == NAG_KILLER_MODE_DOC) return NAG_KILLER_MODE_DOC;
   return mode == NAG_KILLER_MODE_C ? NAG_KILLER_MODE_C : NAG_KILLER_MODE_B;
 }
 
@@ -490,9 +494,22 @@ static uint32_t batteryPreheatFeedbackLastRxMs = 0;
 static uint32_t nagKillerLastRxMs = 0;
 static uint32_t nagKillerLastTxMs = 0;
 static uint32_t nagKillerLastApMs = 0;
+static uint32_t nagKillerApActiveEnterMs = 0;
 static uint32_t nagKillerLastSteeringMs = 0;
 static uint32_t nagKillerState2EnterMs = 0;
 static uint32_t nagKillerState3EnterMs = 0;
+static uint32_t nagKillerDocState1EnterMs = 0;
+static uint32_t nagKillerDocState2EnterMs = 0;
+static uint32_t nagKillerDocState3EnterMs = 0;
+static uint32_t nagKillerDocState2HoldUntilMs = 0;
+static float nagKillerDocState1HoldTorqueNm = 0.0f;
+static float nagKillerDocState2HoldTorqueNm = 0.0f;
+static float nagKillerDocMildTorqueNm = 1.25f;
+static float nagKillerDocLastTorqueNm = 0.0f;
+static uint8_t nagKillerDocState1HoldHandsLevel = 0;
+static uint8_t nagKillerDocState2HoldHandsLevel = 0;
+static uint8_t nagKillerDocLastHandsLevel = 0;
+static bool nagKillerDocState2Level2WasActive = false;
 static uint16_t nagKillerWalkSeed = 0xACE1;
 static float nagKillerLastModeCTorqueNm = 0.5f;
 static float nagKillerSteeringAngleDeg = 0.0f;
@@ -541,6 +558,14 @@ static bool twai_send(const can_frame& frame) {
   }
   g_status.can1TxFail++;
   return false;
+}
+
+static bool nagKillerSendFrame(const can_frame& frame) {
+#ifdef ENABLE_CANB_MCP2515
+  return canb_send(frame);  // T-2CAN: Nag-Killer lives on bus=2 / MCP2515 / physical CANA.
+#else
+  return twai_send(frame);
+#endif
 }
 
 static bool twai_recv(can_frame& frame) {
@@ -623,6 +648,7 @@ constexpr uint32_t CAN_ID_UI_TRIP_PLANNING = 0x082;
 constexpr uint32_t CAN_ID_NAG_MODE_B_TARGET = 0x052;
 constexpr uint32_t CAN_ID_NAG_MODE_C_TARGET = 0x370;
 constexpr uint32_t CAN_ID_NAG_STEERING_ANGLE = 0x129;
+constexpr uint32_t CAN_ID_EPAS_SYS_STATUS = 0x313;
 constexpr uint32_t CAN_ID_BMS_THERMAL_STATUS = 0x312;
 constexpr uint32_t CAN_ID_BMS_LOG1 = 0x374;
 constexpr uint32_t CAN_ID_BMS_PACK_TEMPERATURES = 0x712;
@@ -642,6 +668,7 @@ static inline bool isRelevantCanId(uint32_t canId) {
          canId == CAN_ID_NAG_MODE_B_TARGET ||
          canId == CAN_ID_NAG_MODE_C_TARGET ||
          canId == CAN_ID_NAG_STEERING_ANGLE ||
+         canId == CAN_ID_EPAS_SYS_STATUS ||
          canId == CAN_ID_BRAKE_PEDAL ||
          canId == CAN_ID_RCM_INERTIAL2_CH ||
          canId == CAN_ID_RCM_INERTIAL2_ETH ||
@@ -834,11 +861,30 @@ constexpr uint8_t NAG_BLOCK_STEER_ANGLE = 8;
 constexpr uint8_t NAG_BLOCK_HANDS_STATE = 9;
 constexpr uint8_t NAG_BLOCK_TX = 10;
 constexpr uint8_t NAG_BLOCK_DLC = 11;
+constexpr uint32_t NAG_KILLER_MODE_C_STARTUP_A_MS = 5000UL;
+constexpr float NAG_KILLER_MODE_A_TORQUE_NM = 1.80f;
 
 static uint32_t nagKillerTargetIdForMode(uint8_t mode) {
-  return normalizeNagKillerMode(mode) == NAG_KILLER_MODE_C
+  const uint8_t normalized = normalizeNagKillerMode(mode);
+  return normalized == NAG_KILLER_MODE_C || normalized == NAG_KILLER_MODE_DOC
     ? CAN_ID_NAG_MODE_C_TARGET
     : CAN_ID_NAG_MODE_B_TARGET;
+}
+
+static bool nagKillerDocStrongHandsState(uint8_t state) {
+  return state >= 3 && state <= 5;
+}
+
+static uint8_t nagKillerHandsLevelForTorque(float torqueNm) {
+  const float mag = fabsf(torqueNm);
+  if (mag >= 2.0f) return 2;
+  if (mag >= 1.0f) return 1;
+  return 0;
+}
+
+static void nagKillerRememberDocOutput(float torqueNm, uint8_t handsLevel) {
+  nagKillerDocLastTorqueNm = torqueNm;
+  nagKillerDocLastHandsLevel = handsLevel;
 }
 
 static int nagKillerTorqueCx100(uint8_t b2, uint8_t b3) {
@@ -865,6 +911,21 @@ static float nagKillerModeBTorqueNm(const RuntimeConfig& cfg, uint8_t index) {
   }
 }
 
+static float nagKillerModeCSweepTorqueNm(const RuntimeConfig& cfg, uint32_t now) {
+  const float negNm = -nagKillerTorqueCx100ToNm(cfg.nagKillerCNegCx100);
+  const float posNm = nagKillerTorqueCx100ToNm(cfg.nagKillerCPosCx100);
+  const float spanNm = posNm - negNm;
+  const uint32_t phase = now % 1000UL;
+  if (phase < 500UL) {
+    return negNm + (static_cast<float>(phase) / 500.0f) * spanNm;
+  }
+  return posNm - (static_cast<float>(phase - 500UL) / 500.0f) * spanNm;
+}
+
+static bool nagKillerApStateActive(uint8_t state) {
+  return state >= 3 && state <= 6;
+}
+
 static uint8_t nagKillerChecksum(const can_frame& frame) {
   uint16_t sum = 0;
   for (uint8_t i = 0; i < 7; ++i) sum += frame.data[i];
@@ -882,11 +943,22 @@ static bool nagKillerSteeringContextFresh(uint32_t now) {
 static void handleNagKillerContextFrame(const can_frame& frame) {
   const uint32_t now = millis();
   if (frame.can_id == CAN_ID_DAS_STATUS && frame.can_dlc >= 6) {
+    const bool previousApFresh = nagKillerApContextFresh(now);
+    const bool previousApActive = nagKillerApStateActive(nagKillerApState);
     nagKillerApState = static_cast<uint8_t>(frame.data[0] & 0x0F);
     const uint8_t handsOnState = static_cast<uint8_t>((frame.data[5] >> 2) & 0x0F);
     nagKillerLastApMs = now;
+    const bool currentApActive = nagKillerApStateActive(nagKillerApState);
+    if (currentApActive) {
+      if (!previousApActive || !previousApFresh || nagKillerApActiveEnterMs == 0) {
+        nagKillerApActiveEnterMs = now;
+      }
+    } else {
+      nagKillerApActiveEnterMs = 0;
+    }
     if (handsOnState != nagKillerHandsOnState) {
-      nagKillerPrevHandsOnState = nagKillerHandsOnState;
+      const uint8_t previousHandsOnState = nagKillerHandsOnState;
+      nagKillerPrevHandsOnState = previousHandsOnState;
       nagKillerHandsOnState = handsOnState;
       if (handsOnState == 2) {
         nagKillerState2EnterMs = now;
@@ -897,6 +969,35 @@ static void handleNagKillerContextFrame(const can_frame& frame) {
         nagKillerState3EnterMs = now;
       } else {
         nagKillerState3EnterMs = 0;
+      }
+
+      if (previousHandsOnState != 1 && handsOnState == 1) {
+        nagKillerDocState1EnterMs = now;
+        nagKillerDocState1HoldTorqueNm = nagKillerDocLastTorqueNm;
+        nagKillerDocState1HoldHandsLevel = nagKillerDocLastHandsLevel;
+      }
+      if (handsOnState != 1) {
+        nagKillerDocState1EnterMs = 0;
+        nagKillerDocState1HoldTorqueNm = 0.0f;
+        nagKillerDocState1HoldHandsLevel = 0;
+      }
+
+      if (previousHandsOnState != 2 && handsOnState == 2) {
+        nagKillerDocState2EnterMs = now;
+      }
+      if (handsOnState != 2) {
+        nagKillerDocState2EnterMs = 0;
+        nagKillerDocState2HoldUntilMs = 0;
+        nagKillerDocState2HoldTorqueNm = 0.0f;
+        nagKillerDocState2HoldHandsLevel = 0;
+        nagKillerDocState2Level2WasActive = false;
+      }
+
+      if (!nagKillerDocStrongHandsState(previousHandsOnState) && nagKillerDocStrongHandsState(handsOnState)) {
+        nagKillerDocState3EnterMs = now;
+      }
+      if (!nagKillerDocStrongHandsState(handsOnState)) {
+        nagKillerDocState3EnterMs = 0;
       }
     }
     g_status.nagKillerApState = nagKillerApState;
@@ -913,14 +1014,120 @@ static void handleNagKillerContextFrame(const can_frame& frame) {
   }
 }
 
+static bool decideNagKillerDocTorque(uint32_t now, float& torqueNm, uint8_t& handsLevel) {
+  if (!nagKillerSteeringContextFresh(now)) {
+    g_status.nagKillerBlocked = NAG_BLOCK_STALE_STEER;
+    return false;
+  }
+
+  const bool useNegative = nagKillerSteeringAngleDeg > 0.0f;
+  if (nagKillerHandsOnState == 1) {
+    if (nagKillerDocState1EnterMs != 0 && (now - nagKillerDocState1EnterMs) < 500UL) {
+      torqueNm = nagKillerDocState1HoldTorqueNm;
+      handsLevel = nagKillerDocState1HoldHandsLevel;
+      nagKillerRememberDocOutput(torqueNm, handsLevel);
+      return true;
+    }
+    g_status.nagKillerBlocked = NAG_BLOCK_HANDS_STATE;
+    return false;
+  }
+
+  if (nagKillerHandsOnState == 2) {
+    if (nagKillerDocState2EnterMs == 0 || (now - nagKillerDocState2EnterMs) < 2000UL) {
+      g_status.nagKillerBlocked = NAG_BLOCK_HANDS_STATE;
+      return false;
+    }
+
+    if (nagKillerDocState2HoldUntilMs != 0 && now < nagKillerDocState2HoldUntilMs) {
+      torqueNm = nagKillerDocState2HoldTorqueNm;
+      handsLevel = nagKillerDocState2HoldHandsLevel;
+      nagKillerRememberDocOutput(torqueNm, handsLevel);
+      return true;
+    }
+
+    const float minNm = useNegative ? -2.0f : 0.5f;
+    const float maxNm = useNegative ? -0.5f : 2.0f;
+    if (nagKillerDocMildTorqueNm < minNm || nagKillerDocMildTorqueNm > maxNm) {
+      nagKillerDocMildTorqueNm = (minNm + maxNm) * 0.5f;
+    }
+    nagKillerWalkSeed = static_cast<uint16_t>(nagKillerWalkSeed * 1103U + 12345U);
+    nagKillerDocMildTorqueNm += (static_cast<int>(nagKillerWalkSeed % 25U) - 12) * 0.01f;
+    if (nagKillerDocMildTorqueNm < minNm) nagKillerDocMildTorqueNm = minNm;
+    if (nagKillerDocMildTorqueNm > maxNm) nagKillerDocMildTorqueNm = maxNm;
+
+    torqueNm = nagKillerDocMildTorqueNm;
+    handsLevel = nagKillerHandsLevelForTorque(torqueNm);
+    const bool level2Active = handsLevel >= 2;
+    if (level2Active && !nagKillerDocState2Level2WasActive) {
+      nagKillerDocState2HoldUntilMs = now + 1000UL;
+      nagKillerDocState2HoldTorqueNm = torqueNm;
+      nagKillerDocState2HoldHandsLevel = 2;
+      handsLevel = 2;
+    }
+    nagKillerDocState2Level2WasActive = level2Active;
+    nagKillerRememberDocOutput(torqueNm, handsLevel);
+    return true;
+  }
+
+  if (nagKillerDocStrongHandsState(nagKillerHandsOnState)) {
+    if (nagKillerDocState3EnterMs == 0 || (now - nagKillerDocState3EnterMs) < 1000UL) {
+      g_status.nagKillerBlocked = NAG_BLOCK_HANDS_STATE;
+      return false;
+    }
+
+    const uint32_t activeMs = now - nagKillerDocState3EnterMs - 1000UL;
+    const uint32_t phase = activeMs % 1500UL;
+    float magNm = 2.1f;
+    if (phase < 500UL) {
+      magNm = (static_cast<float>(phase) / 500.0f) * 2.1f;
+    }
+    torqueNm = useNegative ? -magNm : magNm;
+    handsLevel = nagKillerHandsLevelForTorque(torqueNm);
+    nagKillerRememberDocOutput(torqueNm, handsLevel);
+    return true;
+  }
+
+  g_status.nagKillerBlocked = NAG_BLOCK_HANDS_STATE;
+  return false;
+}
+
 static bool decideNagKillerTorque(const RuntimeConfig& cfg,
+                                  uint32_t targetId,
+                                  bool testOverride,
                                   uint8_t& outB2,
                                   uint8_t& outB3,
-                                  bool& outSetHandsOn) {
+                                  uint8_t& outHandsOnLevel,
+                                  bool& outForceHandsOnLevel) {
   const uint32_t now = millis();
   const uint8_t mode = normalizeNagKillerMode(cfg.nagKillerMode);
   g_status.nagKillerMode = mode;
   g_status.nagKillerBurstActive = 0;
+  outHandsOnLevel = 0;
+  outForceHandsOnLevel = false;
+
+  if (testOverride) {
+    float torqueNm = 0.0f;
+    if (targetId == CAN_ID_NAG_MODE_B_TARGET) {
+      if (now - nagKillerModeBLastChangeMs >= 200UL) {
+        nagKillerModeBTorqueIndex = static_cast<uint8_t>((nagKillerModeBTorqueIndex + 1) & 0x03);
+        nagKillerModeBLastChangeMs = now;
+      }
+      torqueNm = nagKillerModeBTorqueNm(cfg, nagKillerModeBTorqueIndex);
+      outHandsOnLevel = 1;
+    } else if (targetId == CAN_ID_NAG_MODE_C_TARGET) {
+      torqueNm = nagKillerModeCSweepTorqueNm(cfg, now);
+      outHandsOnLevel = nagKillerHandsLevelForTorque(torqueNm);
+    } else {
+      g_status.nagKillerBlocked = NAG_BLOCK_MODE;
+      return false;
+    }
+
+    nagKillerNmToBytes(torqueNm, outB2, outB3);
+    outForceHandsOnLevel = outHandsOnLevel > 0;
+    g_status.nagKillerBurstActive = 1;
+    g_status.nagKillerBlocked = NAG_BLOCK_NONE;
+    return true;
+  }
 
   if (!cfg.nagKillerEnabled) {
     g_status.nagKillerBlocked = NAG_BLOCK_DISABLED;
@@ -931,7 +1138,7 @@ static bool decideNagKillerTorque(const RuntimeConfig& cfg,
     g_status.nagKillerBlocked = NAG_BLOCK_STALE_AP;
     return false;
   }
-  if (nagKillerApState < 3 || nagKillerApState > 6) {
+  if (!nagKillerApStateActive(nagKillerApState)) {
     g_status.nagKillerBlocked = NAG_BLOCK_AP_STATE;
     return false;
   }
@@ -950,13 +1157,24 @@ static bool decideNagKillerTorque(const RuntimeConfig& cfg,
       nagKillerModeBLastChangeMs = now;
     }
     nagKillerNmToBytes(nagKillerModeBTorqueNm(cfg, nagKillerModeBTorqueIndex), outB2, outB3);
-    outSetHandsOn = true;
+    outHandsOnLevel = 1;
+    outForceHandsOnLevel = true;
     g_status.nagKillerBurstActive = 1;
     g_status.nagKillerBlocked = NAG_BLOCK_NONE;
     return true;
   }
 
   if (mode == NAG_KILLER_MODE_C) {
+    if (nagKillerApActiveEnterMs != 0 &&
+        (now - nagKillerApActiveEnterMs) < NAG_KILLER_MODE_C_STARTUP_A_MS) {
+      nagKillerNmToBytes(NAG_KILLER_MODE_A_TORQUE_NM, outB2, outB3);
+      outHandsOnLevel = 1;
+      outForceHandsOnLevel = true;
+      g_status.nagKillerBurstActive = 1;
+      g_status.nagKillerBlocked = NAG_BLOCK_NONE;
+      return true;
+    }
+
     if (!nagKillerSteeringContextFresh(now)) {
       g_status.nagKillerBlocked = NAG_BLOCK_STALE_STEER;
       return false;
@@ -967,7 +1185,7 @@ static bool decideNagKillerTorque(const RuntimeConfig& cfg,
     }
 
     float torqueNm = 0.0f;
-    bool setHandsOn = false;
+    uint8_t handsLevel = 0;
     const float cNegMaxNm = nagKillerTorqueCx100ToNm(cfg.nagKillerCNegCx100);
     const float cPosMaxNm = nagKillerTorqueCx100ToNm(cfg.nagKillerCPosCx100);
     if (nagKillerHandsOnState == 1) {
@@ -988,31 +1206,35 @@ static bool decideNagKillerTorque(const RuntimeConfig& cfg,
       if (mag > maxMag) mag = maxMag;
       torqueNm = useNegative ? -mag : mag;
       nagKillerLastModeCTorqueNm = torqueNm;
-      setHandsOn = fabsf(torqueNm) >= 1.0f;
+      handsLevel = fabsf(torqueNm) >= 1.0f ? 1 : 0;
     } else if (nagKillerHandsOnState == 3) {
       if (nagKillerState3EnterMs == 0 || (now - nagKillerState3EnterMs) < 1000UL) {
         g_status.nagKillerBlocked = NAG_BLOCK_HANDS_STATE;
         return false;
       }
-      const uint32_t activeMs = now - nagKillerState3EnterMs - 1000UL;
-      const uint32_t phase = activeMs % 1000UL;
-      const float negNm = -cNegMaxNm;
-      const float posNm = cPosMaxNm;
-      const float spanNm = posNm - negNm;
-      if (phase < 500UL) {
-        torqueNm = negNm + (static_cast<float>(phase) / 500.0f) * spanNm;
-      } else {
-        torqueNm = posNm - (static_cast<float>(phase - 500UL) / 500.0f) * spanNm;
-      }
+      torqueNm = nagKillerModeCSweepTorqueNm(cfg, now - nagKillerState3EnterMs - 1000UL);
       nagKillerLastModeCTorqueNm = torqueNm;
-      setHandsOn = fabsf(torqueNm) >= 1.0f;
+      handsLevel = fabsf(torqueNm) >= 1.0f ? 1 : 0;
     } else {
       g_status.nagKillerBlocked = NAG_BLOCK_HANDS_STATE;
       return false;
     }
 
     nagKillerNmToBytes(torqueNm, outB2, outB3);
-    outSetHandsOn = setHandsOn;
+    outHandsOnLevel = handsLevel;
+    outForceHandsOnLevel = handsLevel > 0;
+    g_status.nagKillerBlocked = NAG_BLOCK_NONE;
+    return true;
+  }
+
+  if (mode == NAG_KILLER_MODE_DOC) {
+    float torqueNm = 0.0f;
+    uint8_t handsLevel = 0;
+    if (!decideNagKillerDocTorque(now, torqueNm, handsLevel)) return false;
+    nagKillerNmToBytes(torqueNm, outB2, outB3);
+    outHandsOnLevel = handsLevel;
+    outForceHandsOnLevel = true;
+    g_status.nagKillerBurstActive = 1;
     g_status.nagKillerBlocked = NAG_BLOCK_NONE;
     return true;
   }
@@ -1024,11 +1246,15 @@ static bool decideNagKillerTorque(const RuntimeConfig& cfg,
 static void handleNagKillerTargetFrame(const can_frame& frame, const RuntimeConfig& cfg) {
   const uint8_t mode = normalizeNagKillerMode(cfg.nagKillerMode);
   const uint32_t targetId = nagKillerTargetIdForMode(mode);
+  const bool test052 = cfg.nagKillerTest052Enabled && frame.can_id == CAN_ID_NAG_MODE_B_TARGET;
+  const bool test370 = cfg.nagKillerTest370Enabled && frame.can_id == CAN_ID_NAG_MODE_C_TARGET;
+  const bool testOverride = test052 || test370;
+  const uint32_t activeTargetId = testOverride ? frame.can_id : targetId;
   g_status.nagKillerMode = mode;
-  g_status.nagKillerTargetId = targetId;
+  g_status.nagKillerTargetId = activeTargetId;
   g_status.nagKillerActive = 0;
 
-  if (frame.can_id != targetId) return;
+  if (frame.can_id != activeTargetId) return;
   nagKillerLastRxMs = millis();
   g_status.nagKillerRxCount++;
 
@@ -1041,31 +1267,36 @@ static void handleNagKillerTargetFrame(const can_frame& frame, const RuntimeConf
   const int realTorque = nagKillerTorqueCx100(frame.data[2], frame.data[3]);
   g_status.nagKillerTargetHandsOn = targetHandsOn;
   g_status.nagKillerRealTorqueCx100 = realTorque;
-  if (targetHandsOn > 1) {
+  if (!testOverride &&
+      ((mode == NAG_KILLER_MODE_DOC && targetHandsOn != 0) ||
+       (mode != NAG_KILLER_MODE_DOC && targetHandsOn > 1))) {
     g_status.nagKillerBlocked = NAG_BLOCK_TARGET_HO;
     return;
   }
 
   uint8_t b2 = 0;
   uint8_t b3 = 0;
-  bool setHandsOn = false;
-  if (!decideNagKillerTorque(cfg, b2, b3, setHandsOn)) return;
+  uint8_t handsOnLevel = 0;
+  bool forceHandsOnLevel = false;
+  if (!decideNagKillerTorque(cfg, activeTargetId, testOverride, b2, b3, handsOnLevel, forceHandsOnLevel)) return;
 
   can_frame echo = frame;
-  echo.can_id = targetId;
+  echo.can_id = activeTargetId;
   echo.can_dlc = 8;
   echo.data[2] = static_cast<uint8_t>((echo.data[2] & 0xF0) | (b2 & 0x0F));
   echo.data[3] = b3;
-  if (setHandsOn) echo.data[4] = static_cast<uint8_t>(echo.data[4] | 0x40);
+  if (forceHandsOnLevel) {
+    echo.data[4] = static_cast<uint8_t>((echo.data[4] & ~0xC0) | ((handsOnLevel & 0x03) << 6));
+  }
   echo.data[6] = static_cast<uint8_t>((echo.data[6] & 0xF0) |
                                       (((echo.data[6] & 0x0F) + 1) & 0x0F));
   echo.data[7] = nagKillerChecksum(echo);
 
-  if (twai_send(echo)) {
+  if (nagKillerSendFrame(echo)) {
     nagKillerLastTxMs = millis();
     g_status.nagKillerTxCount++;
     g_status.nagKillerLastTorqueCx100 = nagKillerTorqueCx100(b2, b3);
-    g_status.nagKillerSetHandsOn = setHandsOn ? 1 : 0;
+    g_status.nagKillerSetHandsOn = forceHandsOnLevel ? handsOnLevel : 0;
     g_status.nagKillerActive = 1;
     g_status.nagKillerBlocked = NAG_BLOCK_NONE;
   } else {
@@ -1478,16 +1709,23 @@ static void setupCanB() {
 static bool applyCanBFilters(uint8_t mode) {
   mode = normalizeCanBFilterMode(mode);
   if (mode == CANB_FILTER_FEATURE) {
-    if (canb.setFilterMask(MCP2515::MASK0, false, 0x7FF) != MCP2515::ERROR_OK) return false;
-    // Feature filter mode keeps MCP2515 RX focused on IDs used by enabled features.
-    if (canb.setFilter(MCP2515::RXF0, false, CANB_ID_STW_ACTN_RQ) != MCP2515::ERROR_OK) return false;
-    if (canb.setFilter(MCP2515::RXF1, false, CANB_ID_BODY_LIGHTING) != MCP2515::ERROR_OK) return false;
+    // Coarse feature filter for the current CANA feature set. MCP2515 only has
+    // six filters, so the masks group nearby IDs while still excluding most
+    // unrelated 11-bit traffic.
+    if (canb.setFilterMask(MCP2515::MASK0, false, 0x42F) != MCP2515::ERROR_OK) return false;
+    // Covers: 0x052, 0x082, 0x3C2.
+    if (canb.setFilter(MCP2515::RXF0, false, 0x002) != MCP2515::ERROR_OK) return false;
+    // Covers: 0x129, 0x229, 0x339.
+    if (canb.setFilter(MCP2515::RXF1, false, 0x029) != MCP2515::ERROR_OK) return false;
 
-    if (canb.setFilterMask(MCP2515::MASK1, false, 0x7FF) != MCP2515::ERROR_OK) return false;
-    if (canb.setFilter(MCP2515::RXF2, false, CANB_ID_VCSEC_STATUS) != MCP2515::ERROR_OK) return false;
-    if (canb.setFilter(MCP2515::RXF3, false, CANB_ID_SCCM_RIGHT_STALK) != MCP2515::ERROR_OK) return false;
-    if (canb.setFilter(MCP2515::RXF4, false, CAN_ID_UI_TRIP_PLANNING) != MCP2515::ERROR_OK) return false;
-    if (canb.setFilter(MCP2515::RXF5, false, CANB_ID_VCLEFT_SWITCH) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilterMask(MCP2515::MASK1, false, 0x60F) != MCP2515::ERROR_OK) return false;
+    // Covers: 0x229, 0x249, 0x339, 0x399.
+    if (canb.setFilter(MCP2515::RXF2, false, 0x209) != MCP2515::ERROR_OK) return false;
+    // Covers: 0x273, 0x313.
+    if (canb.setFilter(MCP2515::RXF3, false, 0x203) != MCP2515::ERROR_OK) return false;
+    // Covers: 0x370.
+    if (canb.setFilter(MCP2515::RXF4, false, 0x200) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF5, false, 0x200) != MCP2515::ERROR_OK) return false;
   } else {
     if (canb.setFilterMask(MCP2515::MASK0, false, 0x000) != MCP2515::ERROR_OK) return false;
     // All-pass mode is useful for capture and unknown-ID debugging.
@@ -2685,6 +2923,11 @@ static void handleCanBFrame(const can_frame& frame) {
   serviceLockSleepCandidate(frame);
   if (lockDeepSleepPending) return;
 
+  handleNagKillerContextFrame(frame);
+  if (frame.can_id == CAN_ID_NAG_MODE_B_TARGET || frame.can_id == CAN_ID_NAG_MODE_C_TARGET) {
+    handleNagKillerTargetFrame(frame, configSnapshot());
+  }
+
   if (frame.can_id == CANB_ID_STW_ACTN_RQ && frame.can_dlc >= 2) {
     canbLastStwActnRqFrame = frame;
     canbHasLastStwActnRqFrame = true;
@@ -2845,6 +3088,11 @@ static void handleStatus() {
 #endif
   s.nagKillerMode = normalizeNagKillerMode(c.nagKillerMode);
   s.nagKillerTargetId = nagKillerTargetIdForMode(s.nagKillerMode);
+  if (c.nagKillerTest052Enabled && !c.nagKillerTest370Enabled) {
+    s.nagKillerTargetId = CAN_ID_NAG_MODE_B_TARGET;
+  } else if (c.nagKillerTest370Enabled && !c.nagKillerTest052Enabled) {
+    s.nagKillerTargetId = CAN_ID_NAG_MODE_C_TARGET;
+  }
   s.nagKillerLastRxAgeMs = nagKillerLastRxMs == 0 ? 0 : (now - nagKillerLastRxMs);
   s.nagKillerLastTxAgeMs = nagKillerLastTxMs == 0 ? 0 : (now - nagKillerLastTxMs);
   s.nagKillerApAgeMs = nagKillerLastApMs == 0 ? 0 : (now - nagKillerLastApMs);
@@ -2892,6 +3140,8 @@ static void handleStatus() {
   j += ",\"dndEnabled\":"; j += c.dndEnabled ? 1 : 0;
   j += ",\"dndVolumeEnabled\":"; j += c.dndVolumeEnabled ? 1 : 0;
   j += ",\"nagKillerEnabled\":"; j += c.nagKillerEnabled ? 1 : 0;
+  j += ",\"nagKillerTest052Enabled\":"; j += c.nagKillerTest052Enabled ? 1 : 0;
+  j += ",\"nagKillerTest370Enabled\":"; j += c.nagKillerTest370Enabled ? 1 : 0;
   j += ",\"nagKillerMode\":"; j += normalizeNagKillerMode(c.nagKillerMode);
   j += ",\"nagKillerBurstMs\":"; j += c.nagKillerBurstMs;
   j += ",\"nagKillerPauseMs\":"; j += c.nagKillerPauseMs;
@@ -3077,6 +3327,8 @@ static void handleConfig() {
   c.dndEnabled              = argBool("dndEnabled", c.dndEnabled);
   c.dndVolumeEnabled        = argBool("dndVolumeEnabled", c.dndVolumeEnabled);
   c.nagKillerEnabled        = argBool("nagKillerEnabled", c.nagKillerEnabled);
+  c.nagKillerTest052Enabled = argBool("nagKillerTest052Enabled", c.nagKillerTest052Enabled);
+  c.nagKillerTest370Enabled = argBool("nagKillerTest370Enabled", c.nagKillerTest370Enabled);
   c.nagKillerMode           = normalizeNagKillerMode(static_cast<uint8_t>(argU16("nagKillerMode", c.nagKillerMode)));
   c.nagKillerBurstMs        = clampNagKillerBurstMs(argU16("nagKillerBurstMs", c.nagKillerBurstMs));
   c.nagKillerPauseMs        = clampNagKillerPauseMs(argU16("nagKillerPauseMs", c.nagKillerPauseMs));
@@ -3353,6 +3605,8 @@ static void loadConfigFromPrefs() {
   c.dndEnabled             = prefs.getBool("dndEn", c.dndEnabled);
   c.dndVolumeEnabled       = prefs.getBool("dndVol", c.dndVolumeEnabled);
   c.nagKillerEnabled       = prefs.getBool("nagEn", c.nagKillerEnabled);
+  c.nagKillerTest052Enabled = prefs.getBool("nagT052", c.nagKillerTest052Enabled);
+  c.nagKillerTest370Enabled = prefs.getBool("nagT370", c.nagKillerTest370Enabled);
   c.nagKillerMode          = normalizeNagKillerMode(prefs.getUChar("nagMode", c.nagKillerMode));
   c.nagKillerBurstMs       = clampNagKillerBurstMs(prefs.getUShort("nagBurst", c.nagKillerBurstMs));
   c.nagKillerPauseMs       = clampNagKillerPauseMs(prefs.getUShort("nagPause", c.nagKillerPauseMs));
@@ -3401,6 +3655,8 @@ static void saveConfigToPrefs() {
   prefs.putBool("dndEn", c.dndEnabled);
   prefs.putBool("dndVol", c.dndVolumeEnabled);
   prefs.putBool("nagEn", c.nagKillerEnabled);
+  prefs.putBool("nagT052", c.nagKillerTest052Enabled);
+  prefs.putBool("nagT370", c.nagKillerTest370Enabled);
   prefs.putUChar("nagMode", normalizeNagKillerMode(c.nagKillerMode));
   prefs.putUShort("nagBurst", c.nagKillerBurstMs);
   prefs.putUShort("nagPause", c.nagKillerPauseMs);
@@ -3510,7 +3766,9 @@ void loop() {
     RuntimeConfig cfg = configSnapshot();
     speedLimitMonitor.update(frame);
     handleNagKillerContextFrame(frame);
+#ifndef ENABLE_CANB_MCP2515
     handleNagKillerTargetFrame(frame, cfg);
+#endif
 #ifdef ENABLE_CANB_MCP2515
     handleDndHandsOnFrame(frame);
     observeLockSleepOccupancyFrame(frame);
