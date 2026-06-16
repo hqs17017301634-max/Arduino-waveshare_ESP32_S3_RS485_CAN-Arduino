@@ -328,6 +328,9 @@ struct RuntimeStatus {
   uint8_t batteryPreheatChargeStatusBus = 0;
   uint8_t batteryPreheatChargeStatus = 255;
   uint32_t batteryPreheatChargeStatusAgeMs = 0;
+  uint8_t batteryPreheatSocSeen = 0;
+  uint8_t batteryPreheatSocBus = 0;
+  int batteryPreheatSocUiDeciPct = -1;
   int batteryPreheatSocPct = -1;
   uint32_t batteryPreheatSocAgeMs = 0;
   uint8_t batteryPreheatFeedbackSeen = 0;
@@ -610,7 +613,8 @@ static bool batteryPreheatPrevForceTest = false;
 static bool batteryPreheatAutoOffLatched = false;
 static uint8_t batteryPreheatAutoOffReason = 0;
 static bool batteryPreheatChargeDetected = false; // Reserved until the charging-state CAN signal is validated.
-static int batteryPreheatSocPct = -1; // Reserved until the pack-SOC CAN signal is validated.
+static int batteryPreheatSocUiDeciPct = -1; // BMS_socUI, 0.1% units from 0x292.
+static int batteryPreheatSocPct = -1;
 static uint32_t batteryPreheatSocLastRxMs = 0;
 static volatile bool canTxInhibitedForSleep = false;
 static bool lockDeepSleepPending = false;
@@ -822,6 +826,7 @@ constexpr uint32_t CAN_ID_NAG_MODE_C_TARGET = 0x370;
 constexpr uint32_t CAN_ID_NAG_STEERING_ANGLE = 0x129;
 constexpr uint32_t CAN_ID_EPAS_SYS_STATUS = 0x313;
 constexpr uint32_t CAN_ID_BMS_STATUS = 0x212;
+constexpr uint32_t CAN_ID_BMS_SOC_STATUS = 0x292;
 constexpr uint32_t CAN_ID_BMS_THERMAL_STATUS = 0x312;
 constexpr uint32_t CAN_ID_VCFRONT_SENSORS = 0x321;
 constexpr uint32_t CAN_ID_BMS_BMB_MIN_MAX = 0x332;
@@ -853,6 +858,7 @@ static inline bool isRelevantCanId(uint32_t canId) {
          canId == CAN_ID_DIF_TORQUE ||
          canId == CAN_ID_VEHICLE_SPEED ||
          canId == CAN_ID_BMS_STATUS ||
+         canId == CAN_ID_BMS_SOC_STATUS ||
          canId == CAN_ID_BMS_THERMAL_STATUS ||
          canId == CAN_ID_VCFRONT_SENSORS ||
          canId == CAN_ID_BMS_BMB_MIN_MAX ||
@@ -877,6 +883,7 @@ constexpr uint32_t BATTERY_PREHEAT_MAX_RUN_MS = 15UL * 60UL * 1000UL;
 constexpr uint32_t BATTERY_PREHEAT_TEMP_FRESH_MS = 30000UL;
 constexpr uint32_t BATTERY_PREHEAT_SOC_FRESH_MS = 30000UL;
 constexpr int BATTERY_PREHEAT_MIN_SOC_PCT = 5;
+constexpr int BATTERY_PREHEAT_MIN_SOC_DECI_PCT = BATTERY_PREHEAT_MIN_SOC_PCT * 10;
 constexpr uint8_t BATTERY_PREHEAT_OFF_NONE = 0;
 constexpr uint8_t BATTERY_PREHEAT_OFF_AVG_TEMP = 1;
 constexpr uint8_t BATTERY_PREHEAT_OFF_MAX_TEMP = 2;
@@ -973,6 +980,24 @@ static void handleBatteryPreheatBmsDiagFrame(const can_frame& frame, uint8_t bus
     return;
   }
 
+  if (frame.can_id == CAN_ID_BMS_SOC_STATUS && frame.can_dlc >= 3) {
+    uint32_t raw = 0;
+    const uint32_t now = millis();
+    batteryPreheatSocLastRxMs = now;
+    g_status.batteryPreheatSocSeen = 1;
+    g_status.batteryPreheatSocBus = bus;
+    if (readBitsLE(frame, 10, 10, raw) && raw != 1023 && raw <= 1000) {
+      batteryPreheatSocUiDeciPct = static_cast<int>(raw);
+      batteryPreheatSocPct = batteryPreheatSocUiDeciPct / 10;
+    } else {
+      batteryPreheatSocUiDeciPct = -1;
+      batteryPreheatSocPct = -1;
+    }
+    g_status.batteryPreheatSocUiDeciPct = batteryPreheatSocUiDeciPct;
+    g_status.batteryPreheatSocPct = batteryPreheatSocPct;
+    return;
+  }
+
   if (frame.can_id == CAN_ID_BMS_BMB_MIN_MAX && frame.can_dlc >= 5) {
     const uint8_t mux = static_cast<uint8_t>(frame.data[0] & 0x03);
     batteryPreheatBms332LastRxMs = millis();
@@ -1053,12 +1078,12 @@ static bool batteryPreheatTemperatureFresh(uint32_t now) {
 static bool batteryPreheatSocFresh(uint32_t now) {
   return batteryPreheatSocLastRxMs != 0 &&
          (now - batteryPreheatSocLastRxMs) <= BATTERY_PREHEAT_SOC_FRESH_MS &&
-         batteryPreheatSocPct >= 0;
+         batteryPreheatSocUiDeciPct >= 0;
 }
 
 static bool batteryPreheatSocTooLow(uint32_t now) {
   return batteryPreheatSocFresh(now) &&
-         batteryPreheatSocPct < BATTERY_PREHEAT_MIN_SOC_PCT;
+         batteryPreheatSocUiDeciPct < BATTERY_PREHEAT_MIN_SOC_DECI_PCT;
 }
 
 static uint16_t batteryPreheatComputeBlockMask(const RuntimeConfig& cfg, uint32_t now);
@@ -1074,6 +1099,7 @@ static void updateBatteryPreheatControlStatus(const RuntimeConfig& cfg, uint32_t
   g_status.batteryPreheatBlockMask = batteryPreheatComputeBlockMask(cfg, now);
   g_status.batteryPreheatChargeStatusAgeMs =
       batteryPreheatBmsStatusLastRxMs == 0 ? 0 : (now - batteryPreheatBmsStatusLastRxMs);
+  g_status.batteryPreheatSocUiDeciPct = batteryPreheatSocUiDeciPct;
   g_status.batteryPreheatSocPct = batteryPreheatSocPct;
   g_status.batteryPreheatSocAgeMs =
       batteryPreheatSocLastRxMs == 0 ? 0 : (now - batteryPreheatSocLastRxMs);
@@ -2228,7 +2254,7 @@ static bool applyCanBFilters(uint8_t mode) {
     // six filters, so the masks group nearby IDs while still excluding most
     // unrelated 11-bit traffic.
     if (canb.setFilterMask(MCP2515::MASK0, false, 0x42F) != MCP2515::ERROR_OK) return false;
-    // Covers: 0x052, 0x082, 0x212, 0x3C2.
+    // Covers: 0x052, 0x082, 0x212, 0x292, 0x3C2.
     if (canb.setFilter(MCP2515::RXF0, false, 0x002) != MCP2515::ERROR_OK) return false;
     // Covers: 0x129, 0x229, 0x339.
     if (canb.setFilter(MCP2515::RXF1, false, 0x029) != MCP2515::ERROR_OK) return false;
@@ -4091,6 +4117,9 @@ static void handleStatus() {
   j += ",\"batteryPreheatChargeStatusBus\":"; j += s.batteryPreheatChargeStatusBus;
   j += ",\"batteryPreheatChargeStatus\":"; j += s.batteryPreheatChargeStatus;
   j += ",\"batteryPreheatChargeStatusAgeMs\":"; j += s.batteryPreheatChargeStatusAgeMs;
+  j += ",\"batteryPreheatSocSeen\":"; j += s.batteryPreheatSocSeen;
+  j += ",\"batteryPreheatSocBus\":"; j += s.batteryPreheatSocBus;
+  j += ",\"batteryPreheatSocUiDeciPct\":"; j += s.batteryPreheatSocUiDeciPct;
   j += ",\"batteryPreheatSocPct\":"; j += s.batteryPreheatSocPct;
   j += ",\"batteryPreheatSocAgeMs\":"; j += s.batteryPreheatSocAgeMs;
   j += ",\"batteryPreheatFeedbackSeen\":"; j += s.batteryPreheatFeedbackSeen;
