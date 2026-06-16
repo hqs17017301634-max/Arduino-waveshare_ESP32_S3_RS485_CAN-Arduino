@@ -177,6 +177,7 @@ struct RuntimeConfig {
   bool fsdForceHeadlightEnabled = false; // AP/FSD-active 0x3E9 headlightRequest=ON
   bool fsdForceHighBeamEnabled = false;  // AP/FSD-active 0x3E9 highLowBeamDecision=ON
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
+  bool batteryPreheatForceTestEnabled = false; // RAM-only test: bypass logical auto-off guards
   bool dndEnabled = false;             // volume DND master switch
   bool dndVolumeEnabled = false;       // left scroll up/down on 0x3C2
   bool nagKillerEnabled = false;       // experimental steering torque echo
@@ -314,6 +315,7 @@ struct RuntimeStatus {
   uint8_t fsdLightHighBeamLeftStatus = 255;
   uint8_t fsdLightHighBeamRightStatus = 255;
   uint8_t batteryPreheatActive = 0;
+  uint8_t batteryPreheatForceTestActive = 0;
   uint32_t batteryPreheatTxCount = 0;
   uint32_t batteryPreheatAgeMs = 0;
   uint32_t batteryPreheatRunMs = 0;
@@ -604,6 +606,7 @@ static uint32_t batteryPreheatLastSendMs = 0;
 static uint32_t batteryPreheatStartMs = 0;
 static uint32_t batteryPreheatTargetStableStartMs = 0;
 static bool batteryPreheatPrevEnabled = false;
+static bool batteryPreheatPrevForceTest = false;
 static bool batteryPreheatAutoOffLatched = false;
 static uint8_t batteryPreheatAutoOffReason = 0;
 static bool batteryPreheatChargeDetected = false; // Reserved until the charging-state CAN signal is validated.
@@ -672,6 +675,7 @@ static void handleBatteryPreheatFeedbackFrame(const can_frame& frame, uint8_t bu
 static void handleBatteryPreheatBmsDiagFrame(const can_frame& frame, uint8_t bus);
 static bool readBitsLE(const can_frame& frame, uint8_t startBit, uint8_t length, uint32_t& value);
 #ifdef ENABLE_CANB_MCP2515
+static bool canbIsReady();
 static bool canb_send(const can_frame& frame);
 #endif
 
@@ -1099,16 +1103,34 @@ static void serviceBatteryPreheatOffFrames(uint32_t now) {
 
 static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
   const uint32_t now = millis();
+  const bool forceTest = cfg.batteryPreheatForceTestEnabled;
+  const bool preheatRequested = cfg.batteryPreheatEnabled || forceTest;
   g_status.batteryPreheatAgeMs =
       batteryPreheatLastSendMs == 0 ? 0 : (now - batteryPreheatLastSendMs);
+  g_status.batteryPreheatForceTestActive = 0;
   updateBatteryPreheatControlStatus(cfg, now);
 
 #ifdef ENABLE_CANB_MCP2515
-  if (!cfg.canbEnabled) {
+  if (!cfg.canbEnabled || !canbIsReady() || canTxInhibitedForSleep) {
     g_status.batteryPreheatActive = 0;
+    g_status.batteryPreheatForceTestActive = 0;
     batteryPreheatLastSendMs = 0;
     batteryPreheatOffFramesLeft = 0;
     batteryPreheatPrevEnabled = false;
+    batteryPreheatPrevForceTest = false;
+    batteryPreheatStartMs = 0;
+    batteryPreheatTargetStableStartMs = 0;
+    updateBatteryPreheatControlStatus(cfg, now);
+    return;
+  }
+#else
+  if (cfg.can1ReceiveOnly || canTxInhibitedForSleep) {
+    g_status.batteryPreheatActive = 0;
+    g_status.batteryPreheatForceTestActive = 0;
+    batteryPreheatLastSendMs = 0;
+    batteryPreheatOffFramesLeft = 0;
+    batteryPreheatPrevEnabled = false;
+    batteryPreheatPrevForceTest = false;
     batteryPreheatStartMs = 0;
     batteryPreheatTargetStableStartMs = 0;
     updateBatteryPreheatControlStatus(cfg, now);
@@ -1116,12 +1138,14 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
   }
 #endif
 
-  if (!cfg.batteryPreheatEnabled) {
+  if (!preheatRequested) {
     g_status.batteryPreheatActive = 0;
+    g_status.batteryPreheatForceTestActive = 0;
     if (batteryPreheatPrevEnabled) {
       batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_USER, false);
     }
     batteryPreheatPrevEnabled = false;
+    batteryPreheatPrevForceTest = false;
     batteryPreheatAutoOffLatched = false;
     batteryPreheatStartMs = 0;
     batteryPreheatTargetStableStartMs = 0;
@@ -1130,16 +1154,19 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
     return;
   }
 
-  if (!batteryPreheatPrevEnabled) {
+  if (!batteryPreheatPrevEnabled || (forceTest && !batteryPreheatPrevForceTest)) {
     batteryPreheatPrevEnabled = true;
     batteryPreheatStartMs = now;
     batteryPreheatTargetStableStartMs = 0;
     batteryPreheatAutoOffLatched = false;
     batteryPreheatAutoOffReason = BATTERY_PREHEAT_OFF_NONE;
-    batteryPreheatChargeDetected = false;
+    if (!forceTest) batteryPreheatChargeDetected = false;
   }
+  batteryPreheatPrevForceTest = forceTest;
 
-  if (!batteryPreheatAutoOffLatched) {
+  if (forceTest) {
+    batteryPreheatTargetStableStartMs = 0;
+  } else if (!batteryPreheatAutoOffLatched) {
     if (batteryPreheatSocTooLow(now)) {
       batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_LOW_SOC, true);
     } else if (batteryPreheatChargeDetected) {
@@ -1165,14 +1192,16 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
     }
   }
 
-  if (batteryPreheatAutoOffLatched) {
+  if (!forceTest && batteryPreheatAutoOffLatched) {
     g_status.batteryPreheatActive = 0;
+    g_status.batteryPreheatForceTestActive = 0;
     serviceBatteryPreheatOffFrames(now);
     updateBatteryPreheatControlStatus(cfg, now);
     return;
   }
 
   g_status.batteryPreheatActive = 1;
+  g_status.batteryPreheatForceTestActive = forceTest ? 1 : 0;
   batteryPreheatOffFramesLeft = 3;  // arm OFF frames for the next disable edge
   if (batteryPreheatLastSendMs != 0 &&
       (now - batteryPreheatLastSendMs) < BATTERY_PREHEAT_PERIOD_MS) {
@@ -1904,12 +1933,19 @@ static uint32_t canbTxFailCount = 0;
 static uint32_t canbLastId = 0;
 static uint32_t canbRxOverflowCount = 0;
 
+static bool canbIsReady() {
+  return canbReady;
+}
+
 static uint16_t batteryPreheatComputeBlockMask(const RuntimeConfig& cfg, uint32_t now) {
   uint16_t mask = 0;
-  if (!cfg.batteryPreheatEnabled) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
+  const bool forceTest = cfg.batteryPreheatForceTestEnabled;
+  const bool preheatRequested = cfg.batteryPreheatEnabled || forceTest;
+  if (!preheatRequested) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
   if (!cfg.canbEnabled) mask |= BATTERY_PREHEAT_BLOCK_CANB_DISABLED;
   if (!canbReady) mask |= BATTERY_PREHEAT_BLOCK_CANB_NOT_READY;
   if (canTxInhibitedForSleep) mask |= BATTERY_PREHEAT_BLOCK_TX_INHIBITED;
+  if (forceTest) return mask;
   if (batteryPreheatSocTooLow(now)) mask |= BATTERY_PREHEAT_BLOCK_LOW_SOC;
   if (batteryPreheatChargeDetected) mask |= BATTERY_PREHEAT_BLOCK_CHARGING;
   if (batteryPreheatStartMs != 0 &&
@@ -3715,6 +3751,48 @@ static void serviceCanBScheduledTx() {
 
 #endif  // ENABLE_CANB_MCP2515
 
+#ifndef ENABLE_CANB_MCP2515
+static uint16_t batteryPreheatComputeBlockMask(const RuntimeConfig& cfg, uint32_t now) {
+  uint16_t mask = 0;
+  const bool forceTest = cfg.batteryPreheatForceTestEnabled;
+  const bool preheatRequested = cfg.batteryPreheatEnabled || forceTest;
+  if (!preheatRequested) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
+  if (cfg.can1ReceiveOnly) mask |= BATTERY_PREHEAT_BLOCK_CANB_DISABLED;
+  if (canTxInhibitedForSleep) mask |= BATTERY_PREHEAT_BLOCK_TX_INHIBITED;
+  if (forceTest) return mask;
+  if (batteryPreheatSocTooLow(now)) mask |= BATTERY_PREHEAT_BLOCK_LOW_SOC;
+  if (batteryPreheatChargeDetected) mask |= BATTERY_PREHEAT_BLOCK_CHARGING;
+  if (batteryPreheatStartMs != 0 &&
+      (now - batteryPreheatStartMs) >= BATTERY_PREHEAT_MAX_RUN_MS) {
+    mask |= BATTERY_PREHEAT_BLOCK_TIMEOUT;
+  }
+  if (batteryPreheatTemperatureFresh(now)) {
+    if (g_status.bmsTempMaxCx100 >= BATTERY_PREHEAT_MAX_CX100) {
+      mask |= BATTERY_PREHEAT_BLOCK_MAX_TEMP;
+    }
+    if (g_status.bmsTempAvgCx100 >= BATTERY_PREHEAT_TARGET_CX100 &&
+        batteryPreheatTargetStableStartMs != 0 &&
+        (now - batteryPreheatTargetStableStartMs) >= BATTERY_PREHEAT_TARGET_STABLE_MS) {
+      mask |= BATTERY_PREHEAT_BLOCK_AVG_TEMP;
+    }
+  }
+  if (batteryPreheatAutoOffLatched) {
+    if (batteryPreheatAutoOffReason == BATTERY_PREHEAT_OFF_AVG_TEMP) {
+      mask |= BATTERY_PREHEAT_BLOCK_AVG_TEMP;
+    } else if (batteryPreheatAutoOffReason == BATTERY_PREHEAT_OFF_MAX_TEMP) {
+      mask |= BATTERY_PREHEAT_BLOCK_MAX_TEMP;
+    } else if (batteryPreheatAutoOffReason == BATTERY_PREHEAT_OFF_CHARGING) {
+      mask |= BATTERY_PREHEAT_BLOCK_CHARGING;
+    } else if (batteryPreheatAutoOffReason == BATTERY_PREHEAT_OFF_TIMEOUT) {
+      mask |= BATTERY_PREHEAT_BLOCK_TIMEOUT;
+    } else if (batteryPreheatAutoOffReason == BATTERY_PREHEAT_OFF_LOW_SOC) {
+      mask |= BATTERY_PREHEAT_BLOCK_LOW_SOC;
+    }
+  }
+  return mask;
+}
+#endif
+
 // ============================================================================
 // Light WebUI -- optional SoftAP parameter page on a dedicated low-prio task
 // ============================================================================
@@ -3899,6 +3977,7 @@ static void handleStatus() {
   j += ",\"fsdForceHeadlightEnabled\":"; j += c.fsdForceHeadlightEnabled ? 1 : 0;
   j += ",\"fsdForceHighBeamEnabled\":"; j += c.fsdForceHighBeamEnabled ? 1 : 0;
   j += ",\"batteryPreheatEnabled\":"; j += c.batteryPreheatEnabled ? 1 : 0;
+  j += ",\"batteryPreheatForceTestEnabled\":"; j += c.batteryPreheatForceTestEnabled ? 1 : 0;
   j += ",\"dndEnabled\":"; j += c.dndEnabled ? 1 : 0;
   j += ",\"dndVolumeEnabled\":"; j += c.dndVolumeEnabled ? 1 : 0;
   j += ",\"nagKillerEnabled\":"; j += c.nagKillerEnabled ? 1 : 0;
@@ -3999,6 +4078,7 @@ static void handleStatus() {
   j += ",\"fsdLightHighBeamLeftStatus\":"; j += s.fsdLightHighBeamLeftStatus;
   j += ",\"fsdLightHighBeamRightStatus\":"; j += s.fsdLightHighBeamRightStatus;
   j += ",\"batteryPreheatActive\":"; j += s.batteryPreheatActive;
+  j += ",\"batteryPreheatForceTestActive\":"; j += s.batteryPreheatForceTestActive;
   j += ",\"batteryPreheatTxCount\":"; j += s.batteryPreheatTxCount;
   j += ",\"batteryPreheatAgeMs\":"; j += s.batteryPreheatAgeMs;
   j += ",\"batteryPreheatRunMs\":"; j += s.batteryPreheatRunMs;
@@ -4184,6 +4264,8 @@ static void handleConfig() {
   c.fsdForceHeadlightEnabled = argBool("fsdForceHeadlightEnabled", c.fsdForceHeadlightEnabled);
   c.fsdForceHighBeamEnabled  = argBool("fsdForceHighBeamEnabled", c.fsdForceHighBeamEnabled);
   c.batteryPreheatEnabled   = argBool("batteryPreheatEnabled", c.batteryPreheatEnabled);
+  c.batteryPreheatForceTestEnabled =
+      argBool("batteryPreheatForceTestEnabled", c.batteryPreheatForceTestEnabled);
   c.dndEnabled              = argBool("dndEnabled", c.dndEnabled);
   c.dndVolumeEnabled        = argBool("dndVolumeEnabled", c.dndVolumeEnabled);
   c.nagKillerEnabled        = argBool("nagKillerEnabled", c.nagKillerEnabled);
