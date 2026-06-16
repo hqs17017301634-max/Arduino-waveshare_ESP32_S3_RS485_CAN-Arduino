@@ -17,6 +17,7 @@ button{background:#2a6;color:#fff;border:0;border-radius:6px;padding:8px 12px;ma
 button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display:none;color:#fff;text-decoration:none;border-radius:6px;padding:8px 12px;margin:4px 4px 0 0}
 .kv{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #262626;gap:12px}.kv span:last-child{color:#9f9;font-variant-numeric:tabular-nums;text-align:right}
 .hint{font-size:12px;color:#aaa;margin:2px 0 6px;line-height:1.45}.result{font-size:12px;color:#ffd479;margin:8px 0 0;min-height:18px}.bar{position:sticky;top:0;z-index:5;background:#111;padding:6px 0 4px}
+.pageSwitch{display:inline-flex;justify-content:flex-start;align-items:center;gap:8px;margin:6px 0 0;font-size:13px;color:#ddd}.hidden{display:none}
 </style></head><body>
 <h1>T-2CAN FSD 运行参数</h1>
 
@@ -24,8 +25,11 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <button onclick="applyConfig()">应用到内存</button>
 <button class="alt" onclick="saveConfig()">保存到 Flash</button>
 <button class="warn" onclick="webOff()">关闭 WebUI</button>
+<label class="pageSwitch">诊断信息页<input type="checkbox" id="diagPageSwitch" onchange="setDiagPage(this.checked)"></label>
 <div class="result" id="testResult"></div>
 </div>
+
+<div id="mainPage" class="page">
 
 <div class="card">
 <h2>通道定义</h2>
@@ -85,7 +89,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <h3>Mode C 扭矩 Nm</h3>
 <label>负端<span class="signed"><b>-</b><input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
 <label>正端<span class="signed"><b>+</b><input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
+<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。任意模式识别到 0x399 hands-on state 2..6 时，会自动触发 3 次音量滚轮免打扰。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
 </div>
 
 <div class="card">
@@ -93,7 +97,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <label>滚轮换挡启用<input type="checkbox" id="scrollGearInjectEnabled"></label>
 <p class="hint">踩刹车 + 右滚轮，bus=2/MCP2515/物理CANA 发送 0x229，默认关闭。</p>
 <label>电池预热启用<input type="checkbox" id="batteryPreheatEnabled"></label>
-<p class="hint">bus=2/MCP2515/物理CANA 每 500ms 固定发送 0x082：AF 50 94 39 FF 03 83 05；温度显示依赖 0x712，测试时建议硬件过滤选“抓包调试”。</p>
+<p class="hint">bus=2/MCP2515/物理CANA 每 500ms 固定发送 0x082：BF 50 A8 80 FF 03 00 80；目标 42.0°C。平均温度到 42°C 连续10秒、最高温到45°C、SOC已知且低于5%、运行15分钟、开始充电或手动关闭时停止ON并补发3帧OFF。</p>
 <label>锁车深度休眠<input type="checkbox" id="lockDeepSleepEnabled"></label>
 <p class="hint">开启后，需车内无人，且 bus=2/MCP2515/物理CANA 的 0x339 VCSEC 简化锁状态=2 连续稳定 5 秒，才停止所有 CAN 发送并进入 ESP32 deep sleep；状态=1 解锁会重置计时。</p>
 <label>bus=1/TWAI/物理CANB 只收不发<input type="checkbox" id="can1ReceiveOnly"></label>
@@ -121,16 +125,44 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>PSRAM 缓冲</span><span id="recPsram">-</span></div>
 </div>
 
+</div>
+
+<div id="diagPage" class="page hidden">
+
 <div class="card">
-<h2>状态 <label style="display:inline;font-size:13px">轮询<input type="checkbox" id="poll" onchange="setPolling(this.checked)"></label></h2>
+<h2>诊断信息 <label style="display:inline;font-size:13px">轮询<input type="checkbox" id="poll" onchange="setPolling(this.checked)"></label></h2>
+<h3>自动诊断</h3>
+<div class="kv"><span>系统健康</span><span id="autoDiagLevel">-</span></div>
+<div class="kv"><span>诊断原因</span><span id="autoDiagReasons">-</span></div>
+<div class="kv"><span>建议动作</span><span id="autoDiagAdvice">-</span></div>
 <h3>CAN 总线</h3>
+<h3>开发板诊断</h3>
+<p class="hint">CPU%已扣除TWAI等待时间；loop最大耗时超过5ms、TX最大耗时超过2ms、TWAI missed/overrun新增、MCP2515 overflow新增，说明实时性需要重点看。</p>
+<div class="kv"><span>窗口ms / CPU MHz</span><span><b id="diagWindowMs">-</b> / <b id="cpuMhz">-</b></span></div>
+<div class="kv"><span>loop Hz / CPU%</span><span><b id="loopHz">-</b> / <b id="cpuPct">-</b></span></div>
+<div class="kv"><span>loop平均/最大 us</span><span><b id="loopAvgUs">-</b> / <b id="loopMaxUs">-</b></span></div>
+<div class="kv"><span>loop等待平均 / 周期最大 us</span><span><b id="loopWaitAvgUs">-</b> / <b id="loopPeriodMaxUs">-</b></span></div>
+<div class="kv"><span>WebUI最大 us</span><span id="webTaskMaxUs">-</span></div>
+<div class="kv"><span>内存可用% / 历史最低%</span><span><b id="freeHeapPct">-</b> / <b id="minFreeHeapPct">-</b></span></div>
+<div class="kv"><span>heap总量/可用/历史最低</span><span><b id="totalHeapBytes">-</b> / <b id="freeHeapBytes">-</b> / <b id="minFreeHeapBytes">-</b></span></div>
 <div class="kv"><span>bus=1 RX</span><span id="can1Rx">-</span></div>
 <div class="kv"><span>bus=1 TX</span><span id="can1Tx">-</span></div>
 <div class="kv"><span>bus=1 TX fail</span><span id="can1TxFail">-</span></div>
+<div class="kv"><span>bus=1 RX/TX/fail 每秒</span><span><b id="can1RxRate">-</b> / <b id="can1TxRate">-</b> / <b id="can1TxFailRate">-</b></span></div>
+<div class="kv"><span>bus=1 RX最大间隔 / TX最大 us</span><span><b id="can1RxGapMaxUs">-</b> / <b id="can1TxMaxUs">-</b></span></div>
+<div class="kv"><span>bus=1 TX慢计数</span><span id="can1TxSlowCount">-</span></div>
 <div class="kv"><span>TWAI state / bus-off</span><span><b id="twaiState">-</b> / <b id="twaiBusOffCount">-</b></span></div>
+<div class="kv"><span>TWAI RX/TX队列 当前</span><span><b id="twaiRxQueue">-</b> / <b id="twaiTxQueue">-</b></span></div>
+<div class="kv"><span>TWAI RX/TX队列 最大</span><span><b id="twaiRxQueueMax">-</b> / <b id="twaiTxQueueMax">-</b></span></div>
+<div class="kv"><span>TWAI missed/overrun/busErr</span><span><b id="twaiRxMissed">-</b> / <b id="twaiRxOverrun">-</b> / <b id="twaiBusError">-</b></span></div>
+<div class="kv"><span>TWAI txFailed / txErr/rxErr</span><span><b id="twaiTxFailed">-</b> / <b id="twaiTxErr">-</b> / <b id="twaiRxErr">-</b></span></div>
 <div class="kv"><span>MCP2515 ready</span><span id="canbReady">-</span></div>
 <div class="kv"><span>MCP2515 filter mode</span><span id="canbHardwareFilterMode">-</span></div>
 <div class="kv"><span>MCP2515 RX / TX / fail</span><span><b id="canbRx">-</b> / <b id="canbTx">-</b> / <b id="canbTxFail">-</b></span></div>
+<div class="kv"><span>MCP2515 RX/TX/fail 每秒</span><span><b id="canbRxRate">-</b> / <b id="canbTxRate">-</b> / <b id="canbTxFailRate">-</b></span></div>
+<div class="kv"><span>MCP2515 RX最大间隔 / TX最大 us</span><span><b id="canbRxGapMaxUs">-</b> / <b id="canbTxMaxUs">-</b></span></div>
+<div class="kv"><span>MCP2515 TX慢 / drain最大</span><span><b id="canbTxSlowCount">-</b> / <b id="canbDrainMaxUs">-</b></span></div>
+<div class="kv"><span>MCP2515 drain最大帧数</span><span id="canbDrainMaxFrames">-</span></div>
 <div class="kv"><span>MCP2515 last ID</span><span id="canbLastId">-</span></div>
 <div class="kv"><span>MCP2515 EFLG / RX overflow</span><span><b id="canbErrorFlags">-</b> / <b id="canbRxOverflowCount">-</b></span></div>
 <h3>速度 / FSD</h3>
@@ -144,6 +176,9 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <h3>电池预热 / 温度</h3>
 <div class="kv"><span>电池预热发送中</span><span id="batteryPreheatActive">-</span></div>
 <div class="kv"><span>电池预热TX / 距今ms</span><span><b id="batteryPreheatTxCount">-</b> / <b id="batteryPreheatAgeMs">-</b></span></div>
+<div class="kv"><span>预热运行 / 到温稳定ms</span><span><b id="batteryPreheatRunMs">-</b> / <b id="batteryPreheatStableTempMs">-</b></span></div>
+<div class="kv"><span>自动关闭 / 原因 / 充电</span><span><b id="batteryPreheatAutoOffLatched">-</b> / <b id="batteryPreheatAutoOffReason">-</b> / <b id="batteryPreheatChargeDetected">-</b></span></div>
+<div class="kv"><span>电池SOC / 距今ms</span><span><b id="batteryPreheatSocPct">-</b> / <b id="batteryPreheatSocAgeMs">-</b></span></div>
 <div class="kv"><span>0x082反馈 / bus / 距今ms</span><span><b id="batteryPreheatFeedbackSeen">-</b> / <b id="batteryPreheatFeedbackBus">-</b> / <b id="batteryPreheatFeedbackAgeMs">-</b></span></div>
 <div class="kv"><span>预热状态 / 请求加热</span><span><b id="batteryPreheatUiState">-</b> / <b id="batteryPreheatUiRequestHeat">-</b></span></div>
 <div class="kv"><span>导航快充 / 类型 / 行程</span><span><b id="batteryPreheatUiNavToSupercharger">-</b> / <b id="batteryPreheatUiFastChargerType">-</b> / <b id="batteryPreheatUiTripActive">-</b></span></div>
@@ -167,6 +202,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>AP / hands-on / 目标Ho</span><span><b id="nagKillerApState">-</b> / <b id="nagKillerHandsOnState">-</b> / <b id="nagKillerTargetHandsOn">-</b></span></div>
 <div class="kv"><span>实车扭矩 / 注入扭矩</span><span><b id="nagKillerRealTorqueCx100">-</b> / <b id="nagKillerLastTorqueCx100">-</b></span></div>
 <div class="kv"><span>方向盘角度 / AP年龄 / 转角年龄</span><span><b id="nagKillerSteeringDegCx10">-</b> / <b id="nagKillerApAgeMs">-</b> / <b id="nagKillerSteeringAgeMs">-</b></span></div>
+<div class="kv"><span>NAG滚轮剩余 / 次数 / 距今ms</span><span><b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b> / <b id="nagKillerDndLastTriggerAgeMs">-</b></span></div>
 <div class="kv"><span>锁车休眠 / 来源 / 距今ms</span><span><b id="lockSleepTriggered">-</b> / <b id="lockSleepSource">-</b> / <b id="lockSleepAgeMs">-</b></span></div>
 <div class="kv"><span>锁车休眠最后ID / 已启用</span><span><b id="lockSleepLastId">-</b> / <b id="lockSleepArmed">-</b></span></div>
 <div class="kv"><span>0x339 简化锁状态 / 距今ms</span><span><b id="lockSleep339SimpleStatus">-</b> / <b id="lockSleep339AgeMs">-</b></span></div>
@@ -184,22 +220,36 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>运行时间 秒</span><span id="uptime">-</span></div>
 </div>
 
+</div>
+
 <script>
-let pollTimer=null,recTimer=null,loaded=false;
+let pollTimer=null,recTimer=null,loaded=false,lastDiag=null;
 const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","cabinCameraTelemetryDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","dndVolumeEnabled","nagKillerEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
-const stats=["can1Rx","can1Tx","can1TxFail","twaiState","twaiBusOffCount","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","batteryPreheatActive","batteryPreheatTxCount","batteryPreheatAgeMs","batteryPreheatFeedbackSeen","batteryPreheatFeedbackBus","batteryPreheatFeedbackAgeMs","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatFeedbackPayload","dndHandsOnState","dndWarningActive","dndActionActive","dndActionType","dndBlocked","dndTxCount","dndLastTriggerAgeMs","dndScrollCacheAgeMs","nagKillerMode","nagKillerActive","nagKillerBlocked","nagKillerBurstActive","nagKillerTargetId","nagKillerRxCount","nagKillerTxCount","nagKillerTxFail","nagKillerLastRxAgeMs","nagKillerLastTxAgeMs","nagKillerApAgeMs","nagKillerSteeringAgeMs","nagKillerApState","nagKillerHandsOnState","nagKillerTargetHandsOn","nagKillerSetHandsOn","nagKillerRealTorqueCx100","nagKillerLastTorqueCx100","nagKillerSteeringDegCx10","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","bmsTempDecodedSeen","bmsTempDecodedMux","bmsTempDecodedCount","bmsTempDecodedAgeMs","bmsTempLatest1Cx100","bmsTempLatest2Cx100","bmsTempLatest3Cx100","bmsTempMinCx100","bmsTempAvgCx100","bmsTempMaxCx100","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339AgeMs","lockSleepCabinEmpty","lockSleep339StableAgeMs","lockSleepBlocked","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
+const stats=["diagWindowMs","cpuMhz","loopHz","cpuPct","loopBusyPct","loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","totalHeapBytes","freeHeapBytes","minFreeHeapBytes","freeHeapPct","minFreeHeapPct","can1Rx","can1Tx","can1TxFail","can1RxRate","can1TxRate","can1TxFailRate","can1RxGapMaxUs","can1TxMaxUs","can1TxSlowCount","twaiState","twaiBusOffCount","twaiRxQueue","twaiTxQueue","twaiRxQueueMax","twaiTxQueueMax","twaiRxMissed","twaiRxOverrun","twaiBusError","twaiTxFailed","twaiTxErr","twaiRxErr","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbRxRate","canbTxRate","canbTxFailRate","canbRxGapMaxUs","canbTxMaxUs","canbTxSlowCount","canbDrainMaxUs","canbDrainMaxFrames","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","batteryPreheatActive","batteryPreheatTxCount","batteryPreheatAgeMs","batteryPreheatRunMs","batteryPreheatStableTempMs","batteryPreheatAutoOffReason","batteryPreheatAutoOffLatched","batteryPreheatChargeDetected","batteryPreheatSocPct","batteryPreheatSocAgeMs","batteryPreheatFeedbackSeen","batteryPreheatFeedbackBus","batteryPreheatFeedbackAgeMs","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatFeedbackPayload","dndHandsOnState","dndWarningActive","dndActionActive","dndActionType","dndBlocked","dndTxCount","dndLastTriggerAgeMs","dndScrollCacheAgeMs","nagKillerMode","nagKillerActive","nagKillerBlocked","nagKillerBurstActive","nagKillerTargetId","nagKillerRxCount","nagKillerTxCount","nagKillerTxFail","nagKillerLastRxAgeMs","nagKillerLastTxAgeMs","nagKillerApAgeMs","nagKillerSteeringAgeMs","nagKillerApState","nagKillerHandsOnState","nagKillerTargetHandsOn","nagKillerSetHandsOn","nagKillerRealTorqueCx100","nagKillerLastTorqueCx100","nagKillerSteeringDegCx10","nagKillerDndRemaining","nagKillerDndTriggerCount","nagKillerDndLastTriggerAgeMs","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","bmsTempDecodedSeen","bmsTempDecodedMux","bmsTempDecodedCount","bmsTempDecodedAgeMs","bmsTempLatest1Cx100","bmsTempLatest2Cx100","bmsTempLatest3Cx100","bmsTempMinCx100","bmsTempAvgCx100","bmsTempMaxCx100","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339AgeMs","lockSleepCabinEmpty","lockSleep339StableAgeMs","lockSleepBlocked","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else e.value=v;}
 function getVal(e){return e.type==="checkbox"?(e.checked?1:0):e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
 function yesNo(v){return v?"是":"否"}
 function cx100(v){return v<=-32000?"-":(v/100).toFixed(2)+" ℃"}
+function us(v){return (v>>>0)+" us"}
+function kb(v){return Math.round((v||0)/1024)+" KB"}
+function setDiagPage(on){const main=document.getElementById("mainPage"),diag=document.getElementById("diagPage");if(main)main.classList.toggle("hidden",on);if(diag)diag.classList.toggle("hidden",!on);if(on){const p=document.getElementById("poll");if(p&&!p.checked){p.checked=true;setPolling(true)}window.scrollTo(0,0)}}
 function fmtStat(k,v){
+if(k==="diagWindowMs")return v+" ms";
+if(k==="cpuMhz")return v+" MHz";
+if(["cpuPct","loopBusyPct","freeHeapPct","minFreeHeapPct"].includes(k))return v+"%";
+if(["loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","can1RxGapMaxUs","can1TxMaxUs","canbRxGapMaxUs","canbTxMaxUs","canbDrainMaxUs"].includes(k))return us(v);
+if(["totalHeapBytes","freeHeapBytes","minFreeHeapBytes"].includes(k))return kb(v);
+if(["can1RxRate","can1TxRate","can1TxFailRate","canbRxRate","canbTxRate","canbTxFailRate"].includes(k))return v+"/s";
 if(k==="canbLastId"||k==="canbErrorFlags"||k==="bmsTempFrameId"||k==="lockSleepLastId"||k==="nagKillerTargetId")return "0x"+(v>>>0).toString(16).toUpperCase();
-if(k==="batteryPreheatActive"||k==="batteryPreheatFeedbackSeen"||k==="bmsTempFrameSeen"||k==="bmsTempDecodedSeen")return yesNo(v);
+if(k==="batteryPreheatActive"||k==="batteryPreheatAutoOffLatched"||k==="batteryPreheatChargeDetected"||k==="batteryPreheatFeedbackSeen"||k==="bmsTempFrameSeen"||k==="bmsTempDecodedSeen")return yesNo(v);
+if(k==="batteryPreheatRunMs"||k==="batteryPreheatStableTempMs"||k==="batteryPreheatSocAgeMs")return v+" ms";
+if(k==="batteryPreheatAutoOffReason")return ["无","平均温度到42°C","最高温到45°C","开始充电","运行15分钟","手动关闭","电量低于5%"][v]||v;
+if(k==="batteryPreheatSocPct")return v<0?"未知":(v+"%");
 if(k==="batteryPreheatFeedbackBus")return v===1?"bus=1":(v===2?"bus=2":v);
 if(k==="batteryPreheatUiTripActive"||k==="batteryPreheatUiNavToSupercharger"||k==="batteryPreheatUiRequestHeat")return yesNo(v);
-if(k==="batteryPreheatUiFastChargerType")return v===3?"V3":(v===0?"无":v);
+if(k==="batteryPreheatUiFastChargerType"){if(v===0)return "0 无";if(v===1)return "1 Low";if(v===2)return "2 V2";if(v===3)return "3 V3";if(v===4)return "4 V4";return v+" 未定义"}
 if(k==="batteryPreheatUiState")return ["空闲","主动加热","状态2","状态3"][v]||v;
 if(k==="batteryPreheatUiPowerW")return v<=-32000?"-":(v+" W");
 if(k==="batteryPreheatUiTargetCx100"||k==="batteryPreheatUiAmbientCx100"||k==="bmsTempLatest1Cx100"||k==="bmsTempLatest2Cx100"||k==="bmsTempLatest3Cx100"||k==="bmsTempMinCx100"||k==="bmsTempAvgCx100"||k==="bmsTempMaxCx100")return cx100(v);
@@ -218,10 +268,64 @@ if(k==="nagKillerSetHandsOn")return v?("L"+v):"否";
 if(k==="nagKillerActive"||k==="nagKillerBurstActive")return yesNo(v);
 if(k==="nagKillerRealTorqueCx100"||k==="nagKillerLastTorqueCx100")return v<=-32000?"-":(v/100).toFixed(2)+" Nm";
 if(k==="nagKillerSteeringDegCx10")return v<=-32000?"-":(v/10).toFixed(1)+"°";
+if(k==="nagKillerDndLastTriggerAgeMs")return v+" ms";
 if(k==="dasAutopilotState")return ["DISABLED","UNAVAILABLE","AVAILABLE","ACTIVE_NOMINAL","ACTIVE_RESTRICTED","ACTIVE_NAV","ACTIVE_FSD"][v]||v;
 if(k==="scrollGearInjectBlocked")return ["ok","bad_target","brake","speed","same_gear","cooldown","ap_state"][v]||v;
 return v}
-function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{stats.forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&k in j)e.textContent=fmtStat(k,j[k])});if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
+function updateAutoDiag(j){
+const items=[];
+const val=k=>Number(j[k]||0);
+const inc=k=>lastDiag?Math.max(0,val(k)-Number(lastDiag[k]||0)):0;
+const add=(sev,msg)=>items.push({sev,msg});
+if(val("loopMaxUs")>10000)add(2,"主循环最大耗时超过10ms");
+else if(val("loopMaxUs")>5000)add(1,"主循环最大耗时超过5ms");
+if(val("loopPeriodMaxUs")>20000)add(2,"主循环周期出现20ms以上间隔");
+else if(val("loopPeriodMaxUs")>10000)add(1,"主循环周期出现10ms以上间隔");
+const cpuPct=val("cpuPct")||val("loopBusyPct");
+const freeHeapPct=val("freeHeapPct");
+const freeHeapBytes=val("freeHeapBytes");
+if(cpuPct>90)add(2,"CPU占用超过90%");
+else if(cpuPct>70)add(1,"CPU占用超过70%");
+if((freeHeapPct>0&&freeHeapPct<5)||(freeHeapBytes>0&&freeHeapBytes<40000))add(2,"可用内存低于5%或40KB");
+else if((freeHeapPct>0&&freeHeapPct<10)||(freeHeapBytes>0&&freeHeapBytes<80000))add(1,"可用内存低于10%或80KB");
+if(val("webTaskMaxUs")>50000)add(1,"WebUI单次处理超过50ms");
+if(inc("twaiBusOffCount")>0)add(2,"TWAI bus-off刚增加");
+else if(val("twaiBusOffCount")>0)add(1,"TWAI bus-off历史非0");
+if(inc("twaiRxMissed")>0)add(2,"TWAI RX missed刚增加");
+else if(val("twaiRxMissed")>0)add(1,"TWAI RX missed历史非0");
+if(inc("twaiRxOverrun")>0)add(2,"TWAI RX overrun刚增加");
+else if(val("twaiRxOverrun")>0)add(1,"TWAI RX overrun历史非0");
+if(inc("twaiBusError")>0)add(1,"TWAI bus error刚增加");
+if(inc("twaiTxFailed")>0||val("can1TxFailRate")>0)add(1,"bus=1发送失败增加");
+if(val("twaiRxQueue")>56)add(2,"TWAI RX当前队列接近满");
+else if(val("twaiRxQueue")>40||val("twaiRxQueueMax")>48)add(1,"TWAI RX队列偏高");
+else if(val("twaiRxQueueMax")>32)add(1,"TWAI RX队列历史偏高");
+if(val("twaiTxQueue")>14)add(2,"TWAI TX当前队列接近满");
+else if(val("twaiTxQueue")>8||val("twaiTxQueueMax")>14)add(1,"TWAI TX队列偏高");
+else if(val("twaiTxQueueMax")>8)add(1,"TWAI TX队列历史偏高");
+if(val("can1TxMaxUs")>5000)add(2,"bus=1 TX耗时超过5ms");
+else if(val("can1TxMaxUs")>2000||val("can1TxSlowCount")>0)add(1,"bus=1 TX耗时超过2ms");
+if(inc("canbRxOverflowCount")>0)add(2,"MCP2515 RX overflow刚增加");
+else if(val("canbRxOverflowCount")>0)add(1,"MCP2515 RX overflow历史非0");
+if(val("canbErrorFlags")!==0)add(1,"MCP2515 EFLG非0");
+if(val("canbDrainMaxUs")>1500)add(2,"MCP2515 drain耗时超过1.5ms");
+else if(val("canbDrainMaxUs")>=900)add(1,"MCP2515 drain触及900us预算");
+if(val("canbDrainMaxFrames")>=24)add(1,"MCP2515单轮drain达到活动预算");
+if(val("canbTxMaxUs")>5000)add(2,"bus=2 TX耗时超过5ms");
+else if(val("canbTxMaxUs")>2000||val("canbTxSlowCount")>0)add(1,"bus=2 TX耗时超过2ms");
+if(val("canbTxFailRate")>0)add(1,"bus=2发送失败增加");
+items.sort((a,b)=>b.sev-a.sev);
+const level=items.length?items[0].sev:0;
+const levelText=["正常","警告","严重"][level];
+const levelEl=document.getElementById("autoDiagLevel");
+const reasonEl=document.getElementById("autoDiagReasons");
+const adviceEl=document.getElementById("autoDiagAdvice");
+if(levelEl){levelEl.textContent=levelText;levelEl.style.color=level===2?"#f66":(level===1?"#ffd479":"#9f9")}
+if(reasonEl)reasonEl.textContent=items.length?items.slice(0,5).map(x=>(x.sev===2?"严重：":"警告：")+x.msg).join("；"):"未发现CPU/内存/CAN负载异常";
+if(adviceEl)adviceEl.textContent=level===2?"优先关闭抓包调试或切到功能ID过滤，复测关键功能":(level===1?"观察是否持续；必要时关闭WebUI轮询或减少抓包":"保持当前设置");
+lastDiag=j;
+}
+function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{stats.forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&k in j)e.textContent=fmtStat(k,j[k])});updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);p.set(k,getVal(e))});return p}
 function applyConfig(){fetch("/config",{method:"POST",body:body()}).then(async r=>{showResult(await r.text());pollStatus()})}

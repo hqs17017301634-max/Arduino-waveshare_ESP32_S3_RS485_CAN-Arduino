@@ -23,11 +23,9 @@
 #include <cmath>
 #include <cstring>
 #include <driver/twai.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <esp_sleep.h>
-#ifdef ENABLE_LIGHT_WEBUI
-#include <esp_heap_caps.h>
-#endif
 
 // ---- CAN B (MCP2515) -- optional secondary bus ----
 // The autowp MCP2515 library provides its own `struct can_frame` with the same
@@ -132,6 +130,7 @@ constexpr uint32_t TWAI_RX_WAIT_MS = 1;
 constexpr uint32_t TWAI_TX_RETRY_DELAY_MS = 1;
 constexpr uint8_t TWAI_TX_RETRY_COUNT = 1;
 constexpr uint8_t TWAI_RX_SCAN_LIMIT = 8;
+constexpr uint32_t DIAG_TX_SLOW_US = 2000;
 
 constexpr uint8_t CANB_FILTER_ALL = 0;
 constexpr uint8_t CANB_FILTER_FEATURE = 1;
@@ -144,6 +143,9 @@ constexpr uint16_t NAG_KILLER_TORQUE_RAW_MIN =
     NAG_KILLER_TORQUE_RAW_BASE - NAG_KILLER_TORQUE_MAX_CX100;
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_MAX =
     NAG_KILLER_TORQUE_RAW_BASE + NAG_KILLER_TORQUE_MAX_CX100;
+constexpr uint8_t NAG_DND_HANDS_MIN = 2;
+constexpr uint8_t NAG_DND_HANDS_MAX = 6;
+constexpr uint8_t NAG_DND_ACTION_COUNT = 3;
 
 // ---- Runtime configuration (WebUI-tunable; defaults match the legacy constants) ----
 // CAN A reads this every relevant frame, so updates must stay cheap. The legacy
@@ -231,6 +233,16 @@ struct RuntimeStatus {
   uint32_t can1TxFail = 0;
   uint32_t twaiBusOffCount = 0;
   uint8_t twaiState = 0;
+  uint32_t twaiRxQueue = 0;
+  uint32_t twaiTxQueue = 0;
+  uint32_t twaiRxQueueMax = 0;
+  uint32_t twaiTxQueueMax = 0;
+  uint32_t twaiRxMissed = 0;
+  uint32_t twaiRxOverrun = 0;
+  uint32_t twaiBusError = 0;
+  uint32_t twaiTxFailed = 0;
+  uint8_t twaiTxErr = 0;
+  uint8_t twaiRxErr = 0;
 
   uint32_t canbRx = 0;
   uint32_t canbTx = 0;
@@ -238,6 +250,35 @@ struct RuntimeStatus {
   uint32_t canbLastId = 0;
   uint8_t canbErrorFlags = 0;
   uint32_t canbRxOverflowCount = 0;
+  uint32_t diagWindowMs = 0;
+  uint32_t loopHz = 0;
+  uint32_t loopAvgUs = 0;
+  uint32_t loopMaxUs = 0;
+  uint32_t loopPeriodMaxUs = 0;
+  uint32_t loopBusyPct = 0;
+  uint32_t cpuPct = 0;
+  uint32_t loopWaitAvgUs = 0;
+  uint32_t can1RxRate = 0;
+  uint32_t can1TxRate = 0;
+  uint32_t can1TxFailRate = 0;
+  uint32_t can1RxGapMaxUs = 0;
+  uint32_t can1TxMaxUs = 0;
+  uint32_t can1TxSlowCount = 0;
+  uint32_t canbRxRate = 0;
+  uint32_t canbTxRate = 0;
+  uint32_t canbTxFailRate = 0;
+  uint32_t canbRxGapMaxUs = 0;
+  uint32_t canbTxMaxUs = 0;
+  uint32_t canbTxSlowCount = 0;
+  uint32_t canbDrainMaxUs = 0;
+  uint8_t canbDrainMaxFrames = 0;
+  uint32_t webTaskMaxUs = 0;
+  uint32_t totalHeapBytes = 0;
+  uint32_t freeHeapBytes = 0;
+  uint32_t minFreeHeapBytes = 0;
+  uint32_t freeHeapPct = 0;
+  uint32_t minFreeHeapPct = 0;
+  uint32_t cpuMhz = 0;
   uint8_t highBeamStrobeActive = 0;
   uint8_t highBeamStrobeRemaining = 0;
   uint8_t rearFogBrakeStrobeActive = 0;
@@ -247,6 +288,13 @@ struct RuntimeStatus {
   uint8_t batteryPreheatActive = 0;
   uint32_t batteryPreheatTxCount = 0;
   uint32_t batteryPreheatAgeMs = 0;
+  uint32_t batteryPreheatRunMs = 0;
+  uint32_t batteryPreheatStableTempMs = 0;
+  uint8_t batteryPreheatAutoOffReason = 0;
+  uint8_t batteryPreheatAutoOffLatched = 0;
+  uint8_t batteryPreheatChargeDetected = 0;
+  int batteryPreheatSocPct = -1;
+  uint32_t batteryPreheatSocAgeMs = 0;
   uint8_t batteryPreheatFeedbackSeen = 0;
   uint8_t batteryPreheatFeedbackBus = 0;
   uint32_t batteryPreheatFeedbackAgeMs = 0;
@@ -288,6 +336,9 @@ struct RuntimeStatus {
   int nagKillerRealTorqueCx100 = -32768;
   int nagKillerLastTorqueCx100 = -32768;
   int nagKillerSteeringDegCx10 = -32768;
+  uint8_t nagKillerDndRemaining = 0;
+  uint32_t nagKillerDndTriggerCount = 0;
+  uint32_t nagKillerDndLastTriggerAgeMs = 0;
   uint8_t bmsTempFrameSeen = 0;
   uint32_t bmsTempFrameId = 0;
   uint8_t bmsTempFrameBus = 0;
@@ -336,6 +387,31 @@ struct RuntimeStatus {
 };
 
 static RuntimeStatus g_status;
+
+static uint32_t diagWindowStartMs = 0;
+static uint32_t diagLoopLastStartUs = 0;
+static uint32_t diagLoopCount = 0;
+static uint64_t diagLoopBusyUs = 0;
+static uint64_t diagLoopWaitUs = 0;
+static uint32_t diagLoopMaxUs = 0;
+static uint32_t diagLoopPeriodMaxUs = 0;
+static uint32_t diagCan1LastRxUs = 0;
+static uint32_t diagCan1RxGapMaxUs = 0;
+static uint32_t diagCan1TxMaxUs = 0;
+static uint32_t diagCan1TxSlowCount = 0;
+static uint32_t diagCanbLastRxUs = 0;
+static uint32_t diagCanbRxGapMaxUs = 0;
+static uint32_t diagCanbTxMaxUs = 0;
+static uint32_t diagCanbTxSlowCount = 0;
+static uint32_t diagCanbDrainMaxUs = 0;
+static uint8_t diagCanbDrainMaxFrames = 0;
+static volatile uint32_t diagWebTaskMaxUs = 0;
+static uint32_t diagPrevCan1Rx = 0;
+static uint32_t diagPrevCan1Tx = 0;
+static uint32_t diagPrevCan1TxFail = 0;
+static uint32_t diagPrevCanbRx = 0;
+static uint32_t diagPrevCanbTx = 0;
+static uint32_t diagPrevCanbTxFail = 0;
 
 // Config is shared between the CAN core and the WebUI task. A short spinlock
 // guards writes; the CAN path takes a one-shot consistent copy per frame. With
@@ -475,6 +551,14 @@ static inline void recordCanFrame(const can_frame&, char, uint8_t) {}
 
 static bool twaiRecoveryInProgress = false;
 static uint32_t batteryPreheatLastSendMs = 0;
+static uint32_t batteryPreheatStartMs = 0;
+static uint32_t batteryPreheatTargetStableStartMs = 0;
+static bool batteryPreheatPrevEnabled = false;
+static bool batteryPreheatAutoOffLatched = false;
+static uint8_t batteryPreheatAutoOffReason = 0;
+static bool batteryPreheatChargeDetected = false; // Reserved until the charging-state CAN signal is validated.
+static int batteryPreheatSocPct = -1; // Reserved until the pack-SOC CAN signal is validated.
+static uint32_t batteryPreheatSocLastRxMs = 0;
 static volatile bool canTxInhibitedForSleep = false;
 static bool lockDeepSleepPending = false;
 static uint32_t lockDeepSleepPendingMs = 0;
@@ -518,6 +602,11 @@ static uint8_t nagKillerHandsOnState = 0;
 static uint8_t nagKillerPrevHandsOnState = 255;
 static uint8_t nagKillerModeBTorqueIndex = 0;
 static uint32_t nagKillerModeBLastChangeMs = 0;
+static uint8_t nagKillerDndRemainingActions = 0;
+static uint32_t nagKillerDndNextActionMs = 0;
+static uint32_t nagKillerDndLastTriggerMs = 0;
+static uint32_t nagKillerDndTriggerCount = 0;
+static bool nagKillerDndHandsRangeActive = false;
 static uint32_t bms712TempLastRxMs = 0;
 static int16_t bms712TempCx100[12] = {};
 static uint16_t bms712TempValidMask = 0;
@@ -534,6 +623,7 @@ static bool twai_send(const can_frame& frame) {
   if (canTxInhibitedForSleep) return false;
   if (g_config.can1ReceiveOnly) return false;  // bus=1/TWAI/physical CANB RX-only
   if (frame.can_dlc > 8) return false;
+  const uint32_t txStartUs = micros();
 
   twai_message_t msg = {};
   msg.identifier = frame.can_id;
@@ -548,6 +638,9 @@ static bool twai_send(const can_frame& frame) {
     }
 
     if (twai_transmit(&msg, pdMS_TO_TICKS(TWAI_TX_WAIT_MS)) == ESP_OK) {
+      const uint32_t txUs = micros() - txStartUs;
+      if (txUs > diagCan1TxMaxUs) diagCan1TxMaxUs = txUs;
+      if (txUs > DIAG_TX_SLOW_US) diagCan1TxSlowCount++;
       g_status.can1Tx++;
       recordCanFrame(frame, 'T', 1);
       return true;
@@ -573,7 +666,10 @@ static bool twai_recv(can_frame& frame) {
 
   for (uint8_t i = 0; i < TWAI_RX_SCAN_LIMIT; ++i) {
     TickType_t waitTicks = (i == 0) ? pdMS_TO_TICKS(TWAI_RX_WAIT_MS) : 0;
-    if (twai_receive(&msg, waitTicks) != ESP_OK) return false;
+    const uint32_t waitStartUs = micros();
+    const esp_err_t recvResult = twai_receive(&msg, waitTicks);
+    diagLoopWaitUs += micros() - waitStartUs;
+    if (recvResult != ESP_OK) return false;
     if (msg.extd || msg.rtr || msg.data_length_code > 8) {
       continue;
     }
@@ -583,6 +679,12 @@ static bool twai_recv(can_frame& frame) {
     frame.can_dlc = msg.data_length_code;
     memset(frame.data, 0, sizeof(frame.data));
     memcpy(frame.data, msg.data, frame.can_dlc);
+    const uint32_t rxUs = micros();
+    if (diagCan1LastRxUs != 0) {
+      const uint32_t gapUs = rxUs - diagCan1LastRxUs;
+      if (gapUs > diagCan1RxGapMaxUs) diagCan1RxGapMaxUs = gapUs;
+    }
+    diagCan1LastRxUs = rxUs;
     g_status.can1Rx++;
     return true;
   }
@@ -638,6 +740,16 @@ static void serviceTwaiAlerts() {
     twaiRecoveryInProgress = false;
   }
   g_status.twaiState = static_cast<uint8_t>(statusInfo.state);
+  g_status.twaiRxQueue = statusInfo.msgs_to_rx;
+  g_status.twaiTxQueue = statusInfo.msgs_to_tx;
+  if (statusInfo.msgs_to_rx > g_status.twaiRxQueueMax) g_status.twaiRxQueueMax = statusInfo.msgs_to_rx;
+  if (statusInfo.msgs_to_tx > g_status.twaiTxQueueMax) g_status.twaiTxQueueMax = statusInfo.msgs_to_tx;
+  g_status.twaiRxMissed = statusInfo.rx_missed_count;
+  g_status.twaiRxOverrun = statusInfo.rx_overrun_count;
+  g_status.twaiBusError = statusInfo.bus_error_count;
+  g_status.twaiTxFailed = statusInfo.tx_failed_count;
+  g_status.twaiTxErr = statusInfo.tx_error_counter;
+  g_status.twaiRxErr = statusInfo.rx_error_counter;
 }
 
 // ---- CAN IDs ----
@@ -689,9 +801,23 @@ static inline bool isRelevantCanId(uint32_t canId) {
 // Battery-preheat 0x082 UI_tripPlanning. This is the fixed payload proven on
 // the vehicle; the old dynamic-template and companion-frame replay paths were
 // removed so this switch has exactly one CAN behavior.
-static const uint8_t BATTERY_PREHEAT_ON[8] = {0xAF, 0x50, 0x94, 0x39, 0xFF, 0x03, 0x83, 0x05};
-static const uint8_t BATTERY_PREHEAT_OFF[8] = {0x01, 0x50, 0x94, 0x39, 0xFF, 0x03, 0x83, 0x05};
+static const uint8_t BATTERY_PREHEAT_ON[8] = {0xBF, 0x50, 0xA8, 0x80, 0xFF, 0x03, 0x00, 0x80};
+static const uint8_t BATTERY_PREHEAT_OFF[8] = {0x01, 0x50, 0xA8, 0x80, 0xFF, 0x03, 0x00, 0x80};
 constexpr uint32_t BATTERY_PREHEAT_PERIOD_MS = 500UL;
+constexpr int BATTERY_PREHEAT_TARGET_CX100 = 4200;
+constexpr int BATTERY_PREHEAT_MAX_CX100 = 4500;
+constexpr uint32_t BATTERY_PREHEAT_TARGET_STABLE_MS = 10000UL;
+constexpr uint32_t BATTERY_PREHEAT_MAX_RUN_MS = 15UL * 60UL * 1000UL;
+constexpr uint32_t BATTERY_PREHEAT_TEMP_FRESH_MS = 30000UL;
+constexpr uint32_t BATTERY_PREHEAT_SOC_FRESH_MS = 30000UL;
+constexpr int BATTERY_PREHEAT_MIN_SOC_PCT = 5;
+constexpr uint8_t BATTERY_PREHEAT_OFF_NONE = 0;
+constexpr uint8_t BATTERY_PREHEAT_OFF_AVG_TEMP = 1;
+constexpr uint8_t BATTERY_PREHEAT_OFF_MAX_TEMP = 2;
+constexpr uint8_t BATTERY_PREHEAT_OFF_CHARGING = 3;
+constexpr uint8_t BATTERY_PREHEAT_OFF_TIMEOUT = 4;
+constexpr uint8_t BATTERY_PREHEAT_OFF_USER = 5;
+constexpr uint8_t BATTERY_PREHEAT_OFF_LOW_SOC = 6;
 constexpr int TEMPERATURE_SNA_CX100 = -32768;
 static uint8_t batteryPreheatOffFramesLeft = 0;
 static uint32_t bmsTempLastRxMs = 0;
@@ -757,33 +883,130 @@ static void sendBatteryPreheatFrame(const uint8_t payload[8]) {
 #endif
 }
 
+static bool batteryPreheatTemperatureFresh(uint32_t now) {
+  return bms712TempLastRxMs != 0 &&
+         (now - bms712TempLastRxMs) <= BATTERY_PREHEAT_TEMP_FRESH_MS &&
+         g_status.bmsTempDecodedCount > 0;
+}
+
+static bool batteryPreheatSocFresh(uint32_t now) {
+  return batteryPreheatSocLastRxMs != 0 &&
+         (now - batteryPreheatSocLastRxMs) <= BATTERY_PREHEAT_SOC_FRESH_MS &&
+         batteryPreheatSocPct >= 0;
+}
+
+static bool batteryPreheatSocTooLow(uint32_t now) {
+  return batteryPreheatSocFresh(now) &&
+         batteryPreheatSocPct < BATTERY_PREHEAT_MIN_SOC_PCT;
+}
+
+static void updateBatteryPreheatControlStatus(uint32_t now) {
+  g_status.batteryPreheatRunMs =
+      batteryPreheatStartMs == 0 ? 0 : (now - batteryPreheatStartMs);
+  g_status.batteryPreheatStableTempMs =
+      batteryPreheatTargetStableStartMs == 0 ? 0 : (now - batteryPreheatTargetStableStartMs);
+  g_status.batteryPreheatAutoOffReason = batteryPreheatAutoOffReason;
+  g_status.batteryPreheatAutoOffLatched = batteryPreheatAutoOffLatched ? 1 : 0;
+  g_status.batteryPreheatChargeDetected = batteryPreheatChargeDetected ? 1 : 0;
+  g_status.batteryPreheatSocPct = batteryPreheatSocPct;
+  g_status.batteryPreheatSocAgeMs =
+      batteryPreheatSocLastRxMs == 0 ? 0 : (now - batteryPreheatSocLastRxMs);
+}
+
+static void batteryPreheatQueueOffFrames(uint8_t reason, bool latch) {
+  batteryPreheatAutoOffReason = reason;
+  batteryPreheatAutoOffLatched = latch;
+  batteryPreheatOffFramesLeft = 3;
+  batteryPreheatLastSendMs = 0;
+  g_status.batteryPreheatActive = 0;
+}
+
+static void serviceBatteryPreheatOffFrames(uint32_t now) {
+  if (batteryPreheatOffFramesLeft == 0) {
+    batteryPreheatLastSendMs = 0;
+    return;
+  }
+  if (batteryPreheatLastSendMs != 0 &&
+      (now - batteryPreheatLastSendMs) < BATTERY_PREHEAT_PERIOD_MS) {
+    return;
+  }
+  batteryPreheatLastSendMs = now;
+  sendBatteryPreheatFrame(BATTERY_PREHEAT_OFF);
+  batteryPreheatOffFramesLeft--;
+}
+
 static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
   const uint32_t now = millis();
   g_status.batteryPreheatAgeMs =
       batteryPreheatLastSendMs == 0 ? 0 : (now - batteryPreheatLastSendMs);
+  updateBatteryPreheatControlStatus(now);
 
 #ifdef ENABLE_CANB_MCP2515
   if (!cfg.canbEnabled) {
     g_status.batteryPreheatActive = 0;
     batteryPreheatLastSendMs = 0;
     batteryPreheatOffFramesLeft = 0;
+    batteryPreheatPrevEnabled = false;
+    batteryPreheatStartMs = 0;
+    batteryPreheatTargetStableStartMs = 0;
+    updateBatteryPreheatControlStatus(now);
     return;
   }
 #endif
 
   if (!cfg.batteryPreheatEnabled) {
     g_status.batteryPreheatActive = 0;
-    // On the OFF edge, emit a few OFF frames so the request clears.
-    if (batteryPreheatOffFramesLeft > 0) {
-      if (batteryPreheatLastSendMs == 0 ||
-          (now - batteryPreheatLastSendMs) >= BATTERY_PREHEAT_PERIOD_MS) {
-        batteryPreheatLastSendMs = now;
-        sendBatteryPreheatFrame(BATTERY_PREHEAT_OFF);
-        batteryPreheatOffFramesLeft--;
+    if (batteryPreheatPrevEnabled) {
+      batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_USER, false);
+    }
+    batteryPreheatPrevEnabled = false;
+    batteryPreheatAutoOffLatched = false;
+    batteryPreheatStartMs = 0;
+    batteryPreheatTargetStableStartMs = 0;
+    serviceBatteryPreheatOffFrames(now);
+    updateBatteryPreheatControlStatus(now);
+    return;
+  }
+
+  if (!batteryPreheatPrevEnabled) {
+    batteryPreheatPrevEnabled = true;
+    batteryPreheatStartMs = now;
+    batteryPreheatTargetStableStartMs = 0;
+    batteryPreheatAutoOffLatched = false;
+    batteryPreheatAutoOffReason = BATTERY_PREHEAT_OFF_NONE;
+    batteryPreheatChargeDetected = false;
+  }
+
+  if (!batteryPreheatAutoOffLatched) {
+    if (batteryPreheatSocTooLow(now)) {
+      batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_LOW_SOC, true);
+    } else if (batteryPreheatChargeDetected) {
+      batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_CHARGING, true);
+    } else if (batteryPreheatStartMs != 0 &&
+               (now - batteryPreheatStartMs) >= BATTERY_PREHEAT_MAX_RUN_MS) {
+      batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_TIMEOUT, true);
+    } else if (batteryPreheatTemperatureFresh(now)) {
+      if (g_status.bmsTempMaxCx100 >= BATTERY_PREHEAT_MAX_CX100) {
+        batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_MAX_TEMP, true);
+      } else if (g_status.bmsTempAvgCx100 >= BATTERY_PREHEAT_TARGET_CX100) {
+        if (batteryPreheatTargetStableStartMs == 0) {
+          batteryPreheatTargetStableStartMs = now;
+        } else if ((now - batteryPreheatTargetStableStartMs) >=
+                   BATTERY_PREHEAT_TARGET_STABLE_MS) {
+          batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_AVG_TEMP, true);
+        }
+      } else {
+        batteryPreheatTargetStableStartMs = 0;
       }
     } else {
-      batteryPreheatLastSendMs = 0;
+      batteryPreheatTargetStableStartMs = 0;
     }
+  }
+
+  if (batteryPreheatAutoOffLatched) {
+    g_status.batteryPreheatActive = 0;
+    serviceBatteryPreheatOffFrames(now);
+    updateBatteryPreheatControlStatus(now);
     return;
   }
 
@@ -791,11 +1014,13 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
   batteryPreheatOffFramesLeft = 3;  // arm OFF frames for the next disable edge
   if (batteryPreheatLastSendMs != 0 &&
       (now - batteryPreheatLastSendMs) < BATTERY_PREHEAT_PERIOD_MS) {
+    updateBatteryPreheatControlStatus(now);
     return;
   }
   batteryPreheatLastSendMs = now;
   sendBatteryPreheatFrame(BATTERY_PREHEAT_ON);
   g_status.batteryPreheatTxCount++;
+  updateBatteryPreheatControlStatus(now);
 }
 
 // Hardware acceptance filter -- a coarse pre-filter so the controller only
@@ -926,6 +1151,19 @@ static bool nagKillerApStateActive(uint8_t state) {
   return state >= 3 && state <= 6;
 }
 
+static bool nagKillerHandsStateTriggersDnd(uint8_t state) {
+  return state >= NAG_DND_HANDS_MIN && state <= NAG_DND_HANDS_MAX;
+}
+
+static void triggerNagKillerDndBurst(uint32_t now) {
+  nagKillerDndRemainingActions = NAG_DND_ACTION_COUNT;
+  nagKillerDndNextActionMs = now;
+  nagKillerDndLastTriggerMs = now;
+  nagKillerDndTriggerCount++;
+  g_status.nagKillerDndRemaining = nagKillerDndRemainingActions;
+  g_status.nagKillerDndTriggerCount = nagKillerDndTriggerCount;
+}
+
 static uint8_t nagKillerChecksum(const can_frame& frame) {
   uint16_t sum = 0;
   for (uint8_t i = 0; i < 7; ++i) sum += frame.data[i];
@@ -956,6 +1194,22 @@ static void handleNagKillerContextFrame(const can_frame& frame) {
     } else {
       nagKillerApActiveEnterMs = 0;
     }
+
+    const RuntimeConfig cfg = configSnapshot();
+    const bool handsStateTriggersDnd = nagKillerHandsStateTriggersDnd(handsOnState);
+    if (!cfg.nagKillerEnabled) {
+      nagKillerDndHandsRangeActive = false;
+      nagKillerDndRemainingActions = 0;
+      g_status.nagKillerDndRemaining = 0;
+    } else if (handsStateTriggersDnd) {
+      if (!nagKillerDndHandsRangeActive) {
+        triggerNagKillerDndBurst(now);
+      }
+      nagKillerDndHandsRangeActive = true;
+    } else {
+      nagKillerDndHandsRangeActive = false;
+    }
+
     if (handsOnState != nagKillerHandsOnState) {
       const uint8_t previousHandsOnState = nagKillerHandsOnState;
       nagKillerPrevHandsOnState = previousHandsOnState;
@@ -1652,6 +1906,7 @@ static volatile bool dndActionActive = false;
 static volatile uint8_t dndActionType = DND_ACTION_NONE;
 static volatile uint8_t dndActionStep = 0;
 static volatile uint32_t dndNextStepMs = 0;
+static volatile bool dndActionRequireSwitches = true;
 static uint32_t dndLastTriggerMs = 0;
 static uint32_t dndVolumeNextAutoMs = 0;
 
@@ -1674,6 +1929,7 @@ static void serviceReverseStrobe(const RuntimeConfig& cfg);
 static void serviceRearFogBrakeStrobe(const RuntimeConfig& cfg);
 static void serviceScrollGearShift(const RuntimeConfig& cfg);
 static void handleDndHandsOnFrame(const can_frame& frame);
+static void serviceNagKillerDndBurst(const RuntimeConfig& cfg);
 static void serviceDndScrollAction(const RuntimeConfig& cfg);
 static void serviceDndVolumeAuto(const RuntimeConfig& cfg);
 static void handleVcleftSwitchFrame(const can_frame& frame, const RuntimeConfig& cfg, bool cacheHazardFrame);
@@ -1753,6 +2009,12 @@ static bool canb_recv(can_frame& frame) {
   frame.can_id &= CAN_SFF_MASK;
   if (frame.can_dlc > 8) frame.can_dlc = 8;
 
+  const uint32_t rxUs = micros();
+  if (diagCanbLastRxUs != 0) {
+    const uint32_t gapUs = rxUs - diagCanbLastRxUs;
+    if (gapUs > diagCanbRxGapMaxUs) diagCanbRxGapMaxUs = gapUs;
+  }
+  diagCanbLastRxUs = rxUs;
   canbRxCount++;
   canbLastId = frame.can_id;
   g_status.canbRx = canbRxCount;
@@ -1765,10 +2027,14 @@ static bool canb_send(const can_frame& frame) {
   if (canTxInhibitedForSleep) return false;
   if (!canbReady) return false;
   if (frame.can_dlc > 8) return false;
+  const uint32_t txStartUs = micros();
   // One short retry on a busy/failed mailbox; no blocking delay so a stuck
   // CAN B can never stall CAN A.
   for (uint8_t attempt = 0; attempt < 2; ++attempt) {
     if (canb.sendMessage(&frame) == MCP2515::ERROR_OK) {
+      const uint32_t txUs = micros() - txStartUs;
+      if (txUs > diagCanbTxMaxUs) diagCanbTxMaxUs = txUs;
+      if (txUs > DIAG_TX_SLOW_US) diagCanbTxSlowCount++;
       canbTxCount++;
       g_status.canbTx = canbTxCount;
       recordCanFrame(frame, 'T', 2);
@@ -1994,8 +2260,8 @@ static bool dndFsdActive() {
   return apState > DAS_AP_STATE_AVAILABLE && apState <= 6;
 }
 
-static bool dndActionAllowed(const RuntimeConfig& cfg) {
-  if (!cfg.dndEnabled || !cfg.dndVolumeEnabled) {
+static bool dndActionAllowed(const RuntimeConfig& cfg, bool requireSwitches) {
+  if (requireSwitches && (!cfg.dndEnabled || !cfg.dndVolumeEnabled)) {
     g_status.dndBlocked = DND_BLOCK_DISABLED;
     return false;
   }
@@ -2036,14 +2302,15 @@ static bool sendDndVolumeFrame(uint8_t cmd) {
   return true;
 }
 
-static bool startDndVolumeAction(const RuntimeConfig& cfg) {
-  if (dndActionActive || !dndActionAllowed(cfg)) return false;
+static bool startDndVolumeAction(const RuntimeConfig& cfg, bool requireSwitches = true) {
+  if (dndActionActive || !dndActionAllowed(cfg, requireSwitches)) return false;
 
   const uint32_t now = millis();
   dndActionActive = true;
   dndActionType = DND_ACTION_VOLUME;
   dndActionStep = 0;
   dndNextStepMs = 0;
+  dndActionRequireSwitches = requireSwitches;
   dndLastTriggerMs = now;
   g_status.dndActionActive = 1;
   g_status.dndActionType = DND_ACTION_VOLUME;
@@ -2061,6 +2328,28 @@ static void handleDndHandsOnFrame(const can_frame& frame) {
   if (handsOnState <= 2 && !dndActionActive) g_status.dndBlocked = DND_BLOCK_NONE;
 }
 
+static void serviceNagKillerDndBurst(const RuntimeConfig& cfg) {
+  if (!cfg.nagKillerEnabled) {
+    nagKillerDndRemainingActions = 0;
+    g_status.nagKillerDndRemaining = 0;
+    return;
+  }
+  g_status.nagKillerDndRemaining = nagKillerDndRemainingActions;
+  if (nagKillerDndRemainingActions == 0) return;
+  if (dndActionActive) return;
+
+  const uint32_t now = millis();
+  if (nagKillerDndNextActionMs != 0 && (int32_t)(now - nagKillerDndNextActionMs) < 0) return;
+
+  if (startDndVolumeAction(cfg, false)) {
+    nagKillerDndRemainingActions--;
+    nagKillerDndNextActionMs = now + (DND_SCROLL_STEP_MS * 5UL);
+    g_status.nagKillerDndRemaining = nagKillerDndRemainingActions;
+  } else {
+    nagKillerDndNextActionMs = now + DND_SCROLL_STEP_MS;
+  }
+}
+
 static void serviceDndScrollAction(const RuntimeConfig& cfg) {
   if (!dndActionActive) {
     g_status.dndActionActive = 0;
@@ -2068,11 +2357,13 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
     return;
   }
 
-  if (!cfg.dndEnabled || !cfg.dndVolumeEnabled || !cfg.canbEnabled || !canbReady) {
+  const bool switchBlocked = dndActionRequireSwitches && (!cfg.dndEnabled || !cfg.dndVolumeEnabled);
+  if (switchBlocked || !cfg.canbEnabled || !canbReady) {
     dndActionActive = false;
+    dndActionRequireSwitches = true;
     g_status.dndActionActive = 0;
     g_status.dndActionType = DND_ACTION_NONE;
-    g_status.dndBlocked = (!cfg.dndEnabled || !cfg.dndVolumeEnabled) ? DND_BLOCK_DISABLED : DND_BLOCK_CANB;
+    g_status.dndBlocked = switchBlocked ? DND_BLOCK_DISABLED : DND_BLOCK_CANB;
     return;
   }
 
@@ -2082,6 +2373,7 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
   static const uint8_t sequence[4] = {0x01, 0x00, 0x3F, 0x00};
   if (dndActionStep >= sizeof(sequence)) {
     dndActionActive = false;
+    dndActionRequireSwitches = true;
     g_status.dndActionActive = 0;
     g_status.dndActionType = DND_ACTION_NONE;
     return;
@@ -2089,6 +2381,7 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
 
   if (!sendDndVolumeFrame(sequence[dndActionStep])) {
     dndActionActive = false;
+    dndActionRequireSwitches = true;
     g_status.dndActionActive = 0;
     g_status.dndActionType = DND_ACTION_NONE;
     return;
@@ -2097,6 +2390,7 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
   dndActionStep++;
   if (dndActionStep >= sizeof(sequence)) {
     dndActionActive = false;
+    dndActionRequireSwitches = true;
     g_status.dndActionActive = 0;
     g_status.dndActionType = DND_ACTION_NONE;
   } else {
@@ -2108,6 +2402,10 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
 
 static void serviceDndVolumeAuto(const RuntimeConfig& cfg) {
   const uint32_t now = millis();
+  if (nagKillerDndRemainingActions > 0) {
+    dndVolumeNextAutoMs = 0;
+    return;
+  }
   if (!cfg.dndEnabled || !cfg.dndVolumeEnabled || !dndFsdActive()) {
     dndVolumeNextAutoMs = 0;
     return;
@@ -3000,13 +3298,18 @@ static void drainCanBWithBudget() {
 #endif
   const uint8_t budget = (intAsserted || recorderActive) ? CANB_RX_SCAN_LIMIT_ACTIVE : CANB_RX_SCAN_LIMIT;
   const uint32_t startUs = micros();
+  uint8_t drained = 0;
   for (uint8_t i = 0; i < budget; ++i) {
     can_frame frame;
     if (!canb_recv(frame)) break;
+    drained++;
     handleCanBFrame(frame);
     if (lockDeepSleepPending) break;
     if ((micros() - startUs) >= CANB_RX_DRAIN_TIME_US) break;
   }
+  const uint32_t drainUs = micros() - startUs;
+  if (drainUs > diagCanbDrainMaxUs) diagCanbDrainMaxUs = drainUs;
+  if (drained > diagCanbDrainMaxFrames) diagCanbDrainMaxFrames = drained;
   updateCanBErrorStatus();
 }
 
@@ -3097,6 +3400,10 @@ static void handleStatus() {
   s.nagKillerLastTxAgeMs = nagKillerLastTxMs == 0 ? 0 : (now - nagKillerLastTxMs);
   s.nagKillerApAgeMs = nagKillerLastApMs == 0 ? 0 : (now - nagKillerLastApMs);
   s.nagKillerSteeringAgeMs = nagKillerLastSteeringMs == 0 ? 0 : (now - nagKillerLastSteeringMs);
+  s.nagKillerDndRemaining = nagKillerDndRemainingActions;
+  s.nagKillerDndTriggerCount = nagKillerDndTriggerCount;
+  s.nagKillerDndLastTriggerAgeMs =
+      nagKillerDndLastTriggerMs == 0 ? 0 : (now - nagKillerDndLastTriggerMs);
   s.nagKillerApState = nagKillerApState;
   s.nagKillerHandsOnState = nagKillerHandsOnState;
   s.nagKillerSteeringDegCx10 = nagKillerLastSteeringMs == 0 ? -32768 : static_cast<int>(nagKillerSteeringAngleDeg * 10.0f);
@@ -3105,7 +3412,7 @@ static void handleStatus() {
   }
 
   String j;
-  j.reserve(6600);
+  j.reserve(9000);
   j += '{';
   j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
@@ -3160,12 +3467,51 @@ static void handleStatus() {
   j += ",\"can1TxFail\":";           j += s.can1TxFail;
   j += ",\"twaiBusOffCount\":";      j += s.twaiBusOffCount;
   j += ",\"twaiState\":";            j += s.twaiState;
+  j += ",\"twaiRxQueue\":";          j += s.twaiRxQueue;
+  j += ",\"twaiTxQueue\":";          j += s.twaiTxQueue;
+  j += ",\"twaiRxQueueMax\":";       j += s.twaiRxQueueMax;
+  j += ",\"twaiTxQueueMax\":";       j += s.twaiTxQueueMax;
+  j += ",\"twaiRxMissed\":";         j += s.twaiRxMissed;
+  j += ",\"twaiRxOverrun\":";        j += s.twaiRxOverrun;
+  j += ",\"twaiBusError\":";         j += s.twaiBusError;
+  j += ",\"twaiTxFailed\":";         j += s.twaiTxFailed;
+  j += ",\"twaiTxErr\":";            j += s.twaiTxErr;
+  j += ",\"twaiRxErr\":";            j += s.twaiRxErr;
   j += ",\"canbRx\":";               j += s.canbRx;
   j += ",\"canbTx\":";               j += s.canbTx;
   j += ",\"canbTxFail\":";           j += s.canbTxFail;
   j += ",\"canbLastId\":";           j += s.canbLastId;
   j += ",\"canbErrorFlags\":";       j += s.canbErrorFlags;
   j += ",\"canbRxOverflowCount\":";  j += s.canbRxOverflowCount;
+  j += ",\"diagWindowMs\":";         j += s.diagWindowMs;
+  j += ",\"loopHz\":";               j += s.loopHz;
+  j += ",\"loopAvgUs\":";            j += s.loopAvgUs;
+  j += ",\"loopMaxUs\":";            j += s.loopMaxUs;
+  j += ",\"loopPeriodMaxUs\":";      j += s.loopPeriodMaxUs;
+  j += ",\"loopBusyPct\":";          j += s.loopBusyPct;
+  j += ",\"cpuPct\":";               j += s.cpuPct;
+  j += ",\"loopWaitAvgUs\":";        j += s.loopWaitAvgUs;
+  j += ",\"can1RxRate\":";           j += s.can1RxRate;
+  j += ",\"can1TxRate\":";           j += s.can1TxRate;
+  j += ",\"can1TxFailRate\":";       j += s.can1TxFailRate;
+  j += ",\"can1RxGapMaxUs\":";       j += s.can1RxGapMaxUs;
+  j += ",\"can1TxMaxUs\":";          j += s.can1TxMaxUs;
+  j += ",\"can1TxSlowCount\":";      j += s.can1TxSlowCount;
+  j += ",\"canbRxRate\":";           j += s.canbRxRate;
+  j += ",\"canbTxRate\":";           j += s.canbTxRate;
+  j += ",\"canbTxFailRate\":";       j += s.canbTxFailRate;
+  j += ",\"canbRxGapMaxUs\":";       j += s.canbRxGapMaxUs;
+  j += ",\"canbTxMaxUs\":";          j += s.canbTxMaxUs;
+  j += ",\"canbTxSlowCount\":";      j += s.canbTxSlowCount;
+  j += ",\"canbDrainMaxUs\":";       j += s.canbDrainMaxUs;
+  j += ",\"canbDrainMaxFrames\":";   j += s.canbDrainMaxFrames;
+  j += ",\"webTaskMaxUs\":";         j += s.webTaskMaxUs;
+  j += ",\"totalHeapBytes\":";       j += s.totalHeapBytes;
+  j += ",\"freeHeapBytes\":";        j += s.freeHeapBytes;
+  j += ",\"minFreeHeapBytes\":";     j += s.minFreeHeapBytes;
+  j += ",\"freeHeapPct\":";          j += s.freeHeapPct;
+  j += ",\"minFreeHeapPct\":";       j += s.minFreeHeapPct;
+  j += ",\"cpuMhz\":";               j += s.cpuMhz;
   j += ",\"highBeamStrobeActive\":"; j += s.highBeamStrobeActive;
   j += ",\"highBeamStrobeRemaining\":"; j += s.highBeamStrobeRemaining;
   j += ",\"rearFogBrakeStrobeActive\":"; j += s.rearFogBrakeStrobeActive;
@@ -3175,6 +3521,13 @@ static void handleStatus() {
   j += ",\"batteryPreheatActive\":"; j += s.batteryPreheatActive;
   j += ",\"batteryPreheatTxCount\":"; j += s.batteryPreheatTxCount;
   j += ",\"batteryPreheatAgeMs\":"; j += s.batteryPreheatAgeMs;
+  j += ",\"batteryPreheatRunMs\":"; j += s.batteryPreheatRunMs;
+  j += ",\"batteryPreheatStableTempMs\":"; j += s.batteryPreheatStableTempMs;
+  j += ",\"batteryPreheatAutoOffReason\":"; j += s.batteryPreheatAutoOffReason;
+  j += ",\"batteryPreheatAutoOffLatched\":"; j += s.batteryPreheatAutoOffLatched;
+  j += ",\"batteryPreheatChargeDetected\":"; j += s.batteryPreheatChargeDetected;
+  j += ",\"batteryPreheatSocPct\":"; j += s.batteryPreheatSocPct;
+  j += ",\"batteryPreheatSocAgeMs\":"; j += s.batteryPreheatSocAgeMs;
   j += ",\"batteryPreheatFeedbackSeen\":"; j += s.batteryPreheatFeedbackSeen;
   j += ",\"batteryPreheatFeedbackBus\":"; j += s.batteryPreheatFeedbackBus;
   j += ",\"batteryPreheatFeedbackAgeMs\":"; j += s.batteryPreheatFeedbackAgeMs;
@@ -3216,6 +3569,9 @@ static void handleStatus() {
   j += ",\"nagKillerRealTorqueCx100\":"; j += s.nagKillerRealTorqueCx100;
   j += ",\"nagKillerLastTorqueCx100\":"; j += s.nagKillerLastTorqueCx100;
   j += ",\"nagKillerSteeringDegCx10\":"; j += s.nagKillerSteeringDegCx10;
+  j += ",\"nagKillerDndRemaining\":"; j += s.nagKillerDndRemaining;
+  j += ",\"nagKillerDndTriggerCount\":"; j += s.nagKillerDndTriggerCount;
+  j += ",\"nagKillerDndLastTriggerAgeMs\":"; j += s.nagKillerDndLastTriggerAgeMs;
   j += ",\"bmsTempFrameSeen\":"; j += s.bmsTempFrameSeen;
   j += ",\"bmsTempFrameId\":"; j += s.bmsTempFrameId;
   j += ",\"bmsTempFrameBus\":"; j += s.bmsTempFrameBus;
@@ -3707,7 +4063,10 @@ static void webTask(void*) {
       webUiShutdownPending = false;
     }
     if (webUiEnabled) {
+      const uint32_t webStartUs = micros();
       server.handleClient();
+      const uint32_t webUs = micros() - webStartUs;
+      if (webUs > diagWebTaskMaxUs) diagWebTaskMaxUs = webUs;
     }
     vTaskDelay(pdMS_TO_TICKS(20));
   }
@@ -3716,6 +4075,93 @@ static void webTask(void*) {
 #endif  // ENABLE_LIGHT_WEBUI
 
 // ---- Main ----
+
+static void updateRuntimeDiagnostics(uint32_t loopElapsedUs) {
+  const uint32_t nowMs = millis();
+  if (diagWindowStartMs == 0) {
+    diagWindowStartMs = nowMs;
+    diagPrevCan1Rx = g_status.can1Rx;
+    diagPrevCan1Tx = g_status.can1Tx;
+    diagPrevCan1TxFail = g_status.can1TxFail;
+    diagPrevCanbRx = g_status.canbRx;
+    diagPrevCanbTx = g_status.canbTx;
+    diagPrevCanbTxFail = g_status.canbTxFail;
+  }
+
+  diagLoopCount++;
+  diagLoopBusyUs += loopElapsedUs;
+  if (loopElapsedUs > diagLoopMaxUs) diagLoopMaxUs = loopElapsedUs;
+
+  const uint32_t windowMs = nowMs - diagWindowStartMs;
+  if (windowMs < 1000UL) return;
+
+  g_status.diagWindowMs = windowMs;
+  g_status.loopHz = (diagLoopCount * 1000UL) / windowMs;
+  g_status.loopAvgUs = diagLoopCount == 0 ? 0 : static_cast<uint32_t>(diagLoopBusyUs / diagLoopCount);
+  g_status.loopMaxUs = diagLoopMaxUs;
+  g_status.loopPeriodMaxUs = diagLoopPeriodMaxUs;
+  g_status.loopWaitAvgUs = diagLoopCount == 0 ? 0 : static_cast<uint32_t>(diagLoopWaitUs / diagLoopCount);
+  const uint64_t activeUs = diagLoopBusyUs > diagLoopWaitUs ? (diagLoopBusyUs - diagLoopWaitUs) : 0ULL;
+  uint64_t cpuPct = (activeUs * 100ULL) / (static_cast<uint64_t>(windowMs) * 1000ULL);
+  if (cpuPct > 100ULL) cpuPct = 100ULL;
+  g_status.cpuPct = static_cast<uint32_t>(cpuPct);
+  g_status.loopBusyPct = g_status.cpuPct;
+
+  g_status.can1RxRate = ((g_status.can1Rx - diagPrevCan1Rx) * 1000UL) / windowMs;
+  g_status.can1TxRate = ((g_status.can1Tx - diagPrevCan1Tx) * 1000UL) / windowMs;
+  g_status.can1TxFailRate = ((g_status.can1TxFail - diagPrevCan1TxFail) * 1000UL) / windowMs;
+  g_status.can1RxGapMaxUs = diagCan1RxGapMaxUs;
+  g_status.can1TxMaxUs = diagCan1TxMaxUs;
+  g_status.can1TxSlowCount = diagCan1TxSlowCount;
+
+  g_status.canbRxRate = ((g_status.canbRx - diagPrevCanbRx) * 1000UL) / windowMs;
+  g_status.canbTxRate = ((g_status.canbTx - diagPrevCanbTx) * 1000UL) / windowMs;
+  g_status.canbTxFailRate = ((g_status.canbTxFail - diagPrevCanbTxFail) * 1000UL) / windowMs;
+  g_status.canbRxGapMaxUs = diagCanbRxGapMaxUs;
+  g_status.canbTxMaxUs = diagCanbTxMaxUs;
+  g_status.canbTxSlowCount = diagCanbTxSlowCount;
+  g_status.canbDrainMaxUs = diagCanbDrainMaxUs;
+  g_status.canbDrainMaxFrames = diagCanbDrainMaxFrames;
+
+#ifdef ENABLE_LIGHT_WEBUI
+  g_status.webTaskMaxUs = diagWebTaskMaxUs;
+  diagWebTaskMaxUs = 0;
+#else
+  g_status.webTaskMaxUs = 0;
+#endif
+  g_status.totalHeapBytes = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+  g_status.freeHeapBytes = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  g_status.minFreeHeapBytes = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+  if (g_status.totalHeapBytes > 0) {
+    g_status.freeHeapPct = (g_status.freeHeapBytes * 100UL) / g_status.totalHeapBytes;
+    g_status.minFreeHeapPct = (g_status.minFreeHeapBytes * 100UL) / g_status.totalHeapBytes;
+  } else {
+    g_status.freeHeapPct = 0;
+    g_status.minFreeHeapPct = 0;
+  }
+  g_status.cpuMhz = ESP.getCpuFreqMHz();
+
+  diagPrevCan1Rx = g_status.can1Rx;
+  diagPrevCan1Tx = g_status.can1Tx;
+  diagPrevCan1TxFail = g_status.can1TxFail;
+  diagPrevCanbRx = g_status.canbRx;
+  diagPrevCanbTx = g_status.canbTx;
+  diagPrevCanbTxFail = g_status.canbTxFail;
+  diagWindowStartMs = nowMs;
+  diagLoopCount = 0;
+  diagLoopBusyUs = 0;
+  diagLoopWaitUs = 0;
+  diagLoopMaxUs = 0;
+  diagLoopPeriodMaxUs = 0;
+  diagCan1RxGapMaxUs = 0;
+  diagCan1TxMaxUs = 0;
+  diagCan1TxSlowCount = 0;
+  diagCanbRxGapMaxUs = 0;
+  diagCanbTxMaxUs = 0;
+  diagCanbTxSlowCount = 0;
+  diagCanbDrainMaxUs = 0;
+  diagCanbDrainMaxFrames = 0;
+}
 
 void setup() {
   pinMode(PIN_LED, OUTPUT);
@@ -3751,6 +4197,13 @@ void setup() {
 }
 
 void loop() {
+  const uint32_t loopStartUs = micros();
+  if (diagLoopLastStartUs != 0) {
+    const uint32_t periodUs = loopStartUs - diagLoopLastStartUs;
+    if (periodUs > diagLoopPeriodMaxUs) diagLoopPeriodMaxUs = periodUs;
+  }
+  diagLoopLastStartUs = loopStartUs;
+
   serviceLockDeepSleep();
   serviceTwaiAlerts();
 
@@ -3786,6 +4239,7 @@ void loop() {
     serviceReverseStrobe(canbCfg);
     serviceRearFogBrakeStrobe(canbCfg);
     serviceScrollGearShift(canbCfg);
+    serviceNagKillerDndBurst(canbCfg);
     serviceDndVolumeAuto(canbCfg);
     serviceDndScrollAction(canbCfg);
   } else {
@@ -3793,6 +4247,7 @@ void loop() {
     serviceReverseStrobe(canbCfg);
     serviceRearFogBrakeStrobe(canbCfg);
     serviceScrollGearShift(canbCfg);
+    serviceNagKillerDndBurst(canbCfg);
     serviceDndVolumeAuto(canbCfg);
     serviceDndScrollAction(canbCfg);
   }
@@ -3800,6 +4255,7 @@ void loop() {
 
   if (lockDeepSleepPending) {
     serviceLockDeepSleep();
+    updateRuntimeDiagnostics(micros() - loopStartUs);
     return;
   }
 
@@ -3809,5 +4265,6 @@ void loop() {
   if (!didWork) {
     digitalWrite(PIN_LED, HIGH);
   }
+  updateRuntimeDiagnostics(micros() - loopStartUs);
 }
 
