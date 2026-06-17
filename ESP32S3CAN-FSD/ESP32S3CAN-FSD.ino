@@ -3839,6 +3839,13 @@ static Preferences prefs;
 static const IPAddress WEBUI_AP_IP(100, 100, 1, 1);
 static const IPAddress WEBUI_AP_NETMASK(255, 255, 255, 0);
 constexpr uint16_t WEBUI_DNS_PORT = 53;
+static constexpr const char* TESLA_CONNMAN_HOST = "connman.vn.cloud.tesla.cn";
+static constexpr const char* TESLA_WWW_HOST = "www.tesla.cn";
+static constexpr const char* TESLA_ROOT_HOST = "tesla.cn";
+static constexpr const char TESLA_CONNMAN_ONLINE_BODY[] =
+    "<html>\n<head>\n</head>\n<body>\n</body>\n</html>\n";
+static_assert(sizeof(TESLA_CONNMAN_ONLINE_BODY) - 1 == 45,
+              "ConnMan online body length must stay 45 bytes");
 
 static void loadConfigFromPrefs();
 static void saveConfigToPrefs();
@@ -3848,13 +3855,32 @@ static void webTask(void*);
 static String normalizedHttpHost() {
   String host = server.hostHeader();
   host.toLowerCase();
+  host.trim();
   const int colon = host.indexOf(':');
   if (colon >= 0) host = host.substring(0, colon);
+  if (host.endsWith(".")) host.remove(host.length() - 1);
   return host;
 }
 
 static bool isTeslaConnectivityHost(const String& host) {
-  return host == "www.tesla.cn" || host == "tesla.cn";
+  return host == TESLA_CONNMAN_HOST || host == TESLA_WWW_HOST || host == TESLA_ROOT_HOST;
+}
+
+static bool isTeslaConnectivityUri(String uri) {
+  uri.toLowerCase();
+  uri.trim();
+  if (!uri.startsWith("http://")) return false;
+  uri.remove(0, 7);
+  const int slash = uri.indexOf('/');
+  if (slash >= 0) uri = uri.substring(0, slash);
+  const int colon = uri.indexOf(':');
+  if (colon >= 0) uri = uri.substring(0, colon);
+  if (uri.endsWith(".")) uri.remove(uri.length() - 1);
+  return isTeslaConnectivityHost(uri);
+}
+
+static bool isTeslaConnectivityRequest() {
+  return isTeslaConnectivityHost(normalizedHttpHost()) || isTeslaConnectivityUri(server.uri());
 }
 
 static void sendNoCacheHeader() {
@@ -3864,10 +3890,21 @@ static void sendNoCacheHeader() {
 
 static void sendTeslaConnectivityResponse() {
   sendNoCacheHeader();
-  server.send(200, "text/plain", "OK");
+  server.sendHeader("X-ConnMan-Status", "online");
+  server.sendHeader("Server", "CloudFront");
+  if (server.method() == HTTP_HEAD) {
+    server.setContentLength(sizeof(TESLA_CONNMAN_ONLINE_BODY) - 1);
+    server.send(200, "text/html", "");
+    return;
+  }
+  server.send(200, "text/html", TESLA_CONNMAN_ONLINE_BODY);
 }
 
-static void sendConnectivityNoContent() {
+static void handleConnectivityProbe() {
+  if (isTeslaConnectivityRequest()) {
+    sendTeslaConnectivityResponse();
+    return;
+  }
   sendNoCacheHeader();
   server.send(204, "text/plain", "");
 }
@@ -3875,7 +3912,7 @@ static void sendConnectivityNoContent() {
 #include "web_ui_page.h"  // kIndexHtml -- kept out of the .ino prototype scanner
 
 static void handleRoot() {
-  if (isTeslaConnectivityHost(normalizedHttpHost())) {
+  if (isTeslaConnectivityRequest()) {
     sendTeslaConnectivityResponse();
     return;
   }
@@ -3883,14 +3920,13 @@ static void handleRoot() {
 }
 
 static void handleCaptivePortalOrNotFound() {
-  const String host = normalizedHttpHost();
-  if (isTeslaConnectivityHost(host)) {
+  if (isTeslaConnectivityRequest()) {
     sendTeslaConnectivityResponse();
     return;
   }
 
   if (server.method() == HTTP_GET || server.method() == HTTP_HEAD) {
-    sendConnectivityNoContent();
+    handleConnectivityProbe();
     return;
   }
 
@@ -4654,10 +4690,11 @@ static void setupLightWebUi() {
   // SoftAP IP / gateway = 100.100.1.1 (subnet 255.255.255.0). Must precede softAP().
   WiFi.softAPConfig(WEBUI_AP_IP, WEBUI_AP_IP, WEBUI_AP_NETMASK);
   WiFi.softAP(WEBUI_AP_SSID, WEBUI_AP_PASS);
-  dnsServer.start(WEBUI_DNS_PORT, "tesla.cn", WEBUI_AP_IP);
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/generate_204", HTTP_GET, sendConnectivityNoContent);
-  server.on("/gen_204", HTTP_GET, sendConnectivityNoContent);
+  dnsServer.start(WEBUI_DNS_PORT, "*", WEBUI_AP_IP);
+  server.on("/", HTTP_ANY, handleRoot);
+  server.on("/generate_204", HTTP_ANY, handleConnectivityProbe);
+  server.on("/gen_204", HTTP_ANY, handleConnectivityProbe);
+  server.on("/hotspot-detect.html", HTTP_ANY, handleConnectivityProbe);
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/config", HTTP_POST, handleConfig);
   server.on("/save", HTTP_POST, handleSave);

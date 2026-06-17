@@ -34,7 +34,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="card">
 <h2>通道定义</h2>
 <p class="hint">官方 LILYGO T-2CAN V1.0：物理 CANA = MCP2515/SPI；物理 CANB = ESP32-S3 原生 TWAI。当前固件 CSV：bus=1/TWAI/物理CANB，bus=2/MCP2515/物理CANA。</p>
-<p class="hint">车机连接本热点后手动打开 http://100.100.1.1；固件只对 tesla.cn 存活检测做本地应答，不再把未知网页重定向成登录页。</p>
+<p class="hint">车机连接本热点后手动打开 http://100.100.1.1；固件会对 connman.vn.cloud.tesla.cn 和 www.tesla.cn 联网检测做本地在线应答。</p>
 <div class="kv"><span>bus=1</span><span>TWAI / physical CANB / GPIO7,6</span></div>
 <div class="kv"><span>bus=2</span><span>MCP2515 / physical CANA / SPI + INT8</span></div>
 </div>
