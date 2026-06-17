@@ -178,9 +178,10 @@ struct RuntimeConfig {
   bool fsdForceHighBeamEnabled = false;  // AP/FSD-active 0x3E9 highLowBeamDecision=ON
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
   bool batteryPreheatForceTestEnabled = false; // RAM-only test: bypass logical auto-off guards
-  bool dndEnabled = false;             // volume DND master switch
-  bool dndVolumeEnabled = false;       // left scroll up/down on 0x3C2
+  bool dndEnabled = false;             // continuous left scroll up/down on 0x3C2
+  bool dndVolumeEnabled = false;       // legacy mirror for old saved configs
   bool nagKillerEnabled = false;       // experimental steering torque echo
+  bool nagKillerDndEnabled = false;    // 0x399 hands-on 2..6 triggers three scroll DND actions
   bool nagKillerTest052Enabled = false; // force-send configured 0x052 torque on live target frames
   bool nagKillerTest370Enabled = false; // force-send configured 0x370 torque on live target frames
   uint8_t nagKillerMode = NAG_KILLER_MODE_B; // 1=Mode B, 2=Mode C, 3=doc state machine
@@ -1414,7 +1415,7 @@ static void handleNagKillerContextFrame(const can_frame& frame) {
 
     const RuntimeConfig cfg = configSnapshot();
     const bool handsStateTriggersDnd = nagKillerHandsStateTriggersDnd(handsOnState);
-    if (!cfg.nagKillerEnabled) {
+    if (!cfg.nagKillerDndEnabled) {
       nagKillerDndHandsRangeActive = false;
       nagKillerDndRemainingActions = 0;
       g_status.nagKillerDndRemaining = 0;
@@ -2547,7 +2548,7 @@ static bool dndFsdActive() {
 }
 
 static bool dndActionAllowed(const RuntimeConfig& cfg, bool requireSwitches) {
-  if (requireSwitches && (!cfg.dndEnabled || !cfg.dndVolumeEnabled)) {
+  if (requireSwitches && !cfg.dndEnabled) {
     g_status.dndBlocked = DND_BLOCK_DISABLED;
     return false;
   }
@@ -2615,7 +2616,7 @@ static void handleDndHandsOnFrame(const can_frame& frame) {
 }
 
 static void serviceNagKillerDndBurst(const RuntimeConfig& cfg) {
-  if (!cfg.nagKillerEnabled) {
+  if (!cfg.nagKillerDndEnabled) {
     nagKillerDndRemainingActions = 0;
     g_status.nagKillerDndRemaining = 0;
     return;
@@ -2643,7 +2644,7 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
     return;
   }
 
-  const bool switchBlocked = dndActionRequireSwitches && (!cfg.dndEnabled || !cfg.dndVolumeEnabled);
+  const bool switchBlocked = dndActionRequireSwitches && !cfg.dndEnabled;
   if (switchBlocked || !cfg.canbEnabled || !canbReady) {
     dndActionActive = false;
     dndActionRequireSwitches = true;
@@ -2692,7 +2693,7 @@ static void serviceDndVolumeAuto(const RuntimeConfig& cfg) {
     dndVolumeNextAutoMs = 0;
     return;
   }
-  if (!cfg.dndEnabled || !cfg.dndVolumeEnabled || !dndFsdActive()) {
+  if (!cfg.dndEnabled || !dndFsdActive()) {
     dndVolumeNextAutoMs = 0;
     return;
   }
@@ -4043,6 +4044,7 @@ static void handleStatus() {
   j += ",\"dndEnabled\":"; j += c.dndEnabled ? 1 : 0;
   j += ",\"dndVolumeEnabled\":"; j += c.dndVolumeEnabled ? 1 : 0;
   j += ",\"nagKillerEnabled\":"; j += c.nagKillerEnabled ? 1 : 0;
+  j += ",\"nagKillerDndEnabled\":"; j += c.nagKillerDndEnabled ? 1 : 0;
   j += ",\"nagKillerTest052Enabled\":"; j += c.nagKillerTest052Enabled ? 1 : 0;
   j += ",\"nagKillerTest370Enabled\":"; j += c.nagKillerTest370Enabled ? 1 : 0;
   j += ",\"nagKillerMode\":"; j += normalizeNagKillerMode(c.nagKillerMode);
@@ -4332,8 +4334,9 @@ static void handleConfig() {
   c.batteryPreheatForceTestEnabled =
       argBool("batteryPreheatForceTestEnabled", c.batteryPreheatForceTestEnabled);
   c.dndEnabled              = argBool("dndEnabled", c.dndEnabled);
-  c.dndVolumeEnabled        = argBool("dndVolumeEnabled", c.dndVolumeEnabled);
+  c.dndVolumeEnabled        = c.dndEnabled;
   c.nagKillerEnabled        = argBool("nagKillerEnabled", c.nagKillerEnabled);
+  c.nagKillerDndEnabled     = argBool("nagKillerDndEnabled", c.nagKillerDndEnabled);
   c.nagKillerTest052Enabled = argBool("nagKillerTest052Enabled", c.nagKillerTest052Enabled);
   c.nagKillerTest370Enabled = argBool("nagKillerTest370Enabled", c.nagKillerTest370Enabled);
   c.nagKillerMode           = normalizeNagKillerMode(static_cast<uint8_t>(argU16("nagKillerMode", c.nagKillerMode)));
@@ -4611,9 +4614,12 @@ static void loadConfigFromPrefs() {
   c.fsdForceHighBeamEnabled = prefs.getBool("fsdHighOn", c.fsdForceHighBeamEnabled);
   c.batteryPreheatEnabled  = prefs.getBool("batHeat", c.batteryPreheatEnabled) ||
                              prefs.getBool("bat082Test", false);
-  c.dndEnabled             = prefs.getBool("dndEn", c.dndEnabled);
-  c.dndVolumeEnabled       = prefs.getBool("dndVol", c.dndVolumeEnabled);
+  c.dndEnabled             = prefs.getBool("dndCont",
+                                           prefs.getBool("dndEn", c.dndEnabled) &&
+                                           prefs.getBool("dndVol", c.dndVolumeEnabled));
+  c.dndVolumeEnabled       = c.dndEnabled;
   c.nagKillerEnabled       = prefs.getBool("nagEn", c.nagKillerEnabled);
+  c.nagKillerDndEnabled    = prefs.getBool("nagDnd", c.nagKillerEnabled);
   c.nagKillerTest052Enabled = prefs.getBool("nagT052", c.nagKillerTest052Enabled);
   c.nagKillerTest370Enabled = prefs.getBool("nagT370", c.nagKillerTest370Enabled);
   c.nagKillerMode          = normalizeNagKillerMode(prefs.getUChar("nagMode", c.nagKillerMode));
@@ -4663,9 +4669,11 @@ static void saveConfigToPrefs() {
   prefs.putBool("fsdHeadOn", c.fsdForceHeadlightEnabled);
   prefs.putBool("fsdHighOn", c.fsdForceHighBeamEnabled);
   prefs.putBool("batHeat", c.batteryPreheatEnabled);
+  prefs.putBool("dndCont", c.dndEnabled);
   prefs.putBool("dndEn", c.dndEnabled);
-  prefs.putBool("dndVol", c.dndVolumeEnabled);
+  prefs.putBool("dndVol", c.dndEnabled);
   prefs.putBool("nagEn", c.nagKillerEnabled);
+  prefs.putBool("nagDnd", c.nagKillerDndEnabled);
   prefs.putBool("nagT052", c.nagKillerTest052Enabled);
   prefs.putBool("nagT370", c.nagKillerTest370Enabled);
   prefs.putUChar("nagMode", normalizeNagKillerMode(c.nagKillerMode));
