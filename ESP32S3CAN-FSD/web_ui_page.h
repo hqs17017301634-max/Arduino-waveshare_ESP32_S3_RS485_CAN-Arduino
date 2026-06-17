@@ -3,35 +3,46 @@
 #pragma once
 
 static const char kIndexHtml[] PROGMEM = R"HTML(<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="zh-CN" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>T-2CAN FSD 设置</title>
 <style>
-body{font-family:system-ui,Arial,sans-serif;margin:0;padding:12px;background:#111;color:#eee}
-h1{font-size:18px;margin:0 0 12px}h2{font-size:15px;margin:0 0 8px;color:#8cf}h3{font-size:13px;margin:12px 0 4px;color:#6a9;border-top:1px solid #2a2a2a;padding-top:8px}
-.card{background:#1c1c1c;border:1px solid #333;border-radius:8px;padding:10px 12px;margin-bottom:12px}
-label{display:flex;justify-content:space-between;align-items:center;margin:6px 0;font-size:14px;gap:12px}
-input[type=number]{width:90px;background:#222;color:#eee;border:1px solid #444;border-radius:4px;padding:3px}
-input[type=text],select{width:100%;box-sizing:border-box;background:#222;color:#eee;border:1px solid #444;border-radius:4px;padding:6px;margin-top:4px}
-.signed{display:flex;align-items:center;gap:6px;color:#eee}.signed b{min-width:10px;text-align:right}.signed em{font-style:normal;color:#aaa;font-size:12px}
-button{background:#2a6;color:#fff;border:0;border-radius:6px;padding:8px 12px;margin:4px 4px 0 0;font-size:14px}
-button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display:none;color:#fff;text-decoration:none;border-radius:6px;padding:8px 12px;margin:4px 4px 0 0}
-.kv{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #262626;gap:12px}.kv span:last-child{color:#9f9;font-variant-numeric:tabular-nums;text-align:right}
-.hint{font-size:12px;color:#aaa;margin:2px 0 6px;line-height:1.45}.result{font-size:12px;color:#ffd479;margin:8px 0 0;min-height:18px}.bar{position:sticky;top:0;z-index:5;background:#111;padding:6px 0 4px}
-.pageSwitch{display:inline-flex;justify-content:flex-start;align-items:center;gap:8px;margin:6px 0 0;font-size:13px;color:#ddd}.hidden{display:none}
+html[data-theme="dark"]{--bg:#101113;--panel:#181a1e;--panel2:#121417;--line:#2a2d33;--line2:#23262b;--text:#eef2f6;--muted:#9aa3ad;--accent:#62c7d8;--accent2:#80d39b;--ok:#44d184;--warn:#ffd166;--bad:#ef6b6b;--btn:#238c61;--btn2:#2d6fbb;--bar:rgba(16,17,19,.94);--shadow:0 1px 0 rgba(255,255,255,.03) inset}
+html[data-theme="light"]{--bg:#f7f3eb;--panel:#fffdf8;--panel2:#f2ece2;--line:#ded6ca;--line2:#ebe1d4;--text:#17202a;--muted:#687382;--accent:#276d7e;--accent2:#227650;--ok:#168a52;--warn:#a55f00;--bad:#c2403c;--btn:#1f8a62;--btn2:#2f67b1;--bar:rgba(255,253,248,.94);--shadow:0 1px 2px rgba(39,34,25,.05)}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;margin:0 auto;padding:14px;background:var(--bg);color:var(--text);-webkit-text-size-adjust:100%;line-height:1.45;max-width:1180px;overflow-x:hidden}
+h1{font-size:21px;margin:2px 0 12px;letter-spacing:0;font-weight:780;color:var(--text)}h2{font-size:15px;margin:0 0 10px;color:var(--accent);font-weight:750}h3{font-size:13px;margin:14px 0 6px;color:var(--accent2);border-top:1px solid var(--line2);padding-top:9px;font-weight:700}h2+h3{border-top:0;padding-top:0;margin-top:2px}
+.page{display:grid;gap:12px;min-width:0}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px;margin:0;box-shadow:var(--shadow);min-width:0;max-width:100%}.wide{grid-column:1/-1}
+label{display:flex;justify-content:space-between;align-items:center;min-height:40px;margin:5px 0;font-size:14px;gap:12px;color:var(--text);min-width:0}
+input,select,button{max-width:100%}
+input[type=number]{width:98px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 9px;font-size:14px}
+input[type=text],select{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px;margin-top:4px;font-size:14px}
+label input[type=number]{flex:0 0 98px;margin-left:auto}label select{flex:1;min-width:160px}label input[type=checkbox]{margin-left:auto}
+input[type=number]:focus,input[type=text]:focus,select:focus{outline:none;border-color:var(--accent)}
+input[type=checkbox]{appearance:none;-webkit-appearance:none;width:48px;height:27px;min-width:48px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);position:relative;vertical-align:middle}
+input[type=checkbox]:before{content:"";position:absolute;width:21px;height:21px;left:2px;top:2px;border-radius:50%;background:#dce3ea;transition:left .12s,background .12s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+input[type=checkbox]:checked{background:var(--ok);border-color:var(--ok)}input[type=checkbox]:checked:before{left:23px;background:#fff}
+.signed{display:flex;align-items:center;gap:6px;color:var(--text)}.signed b{min-width:10px;text-align:right}.signed em{font-style:normal;color:var(--muted);font-size:12px}
+button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px solid transparent;border-radius:8px;padding:9px 13px;margin:4px 4px 0 0;font-size:14px;font-weight:650;text-decoration:none}button.alt,.linkbtn{background:var(--btn2)}button.warn{background:#a64040}button.ghost{background:transparent;color:var(--accent);border-color:var(--line)}.linkbtn{display:none}
+.kv{display:flex;justify-content:space-between;align-items:flex-start;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line2);gap:14px}.kv span{min-width:0}.kv span:first-child{color:var(--muted)}.kv span:last-child{color:var(--ok);font-variant-numeric:tabular-nums;text-align:right;word-break:break-word;overflow-wrap:anywhere;max-width:62%}.kv b{font-weight:700}
+.hint{font-size:12px;color:var(--muted);margin:2px 0 8px;line-height:1.5;overflow-wrap:anywhere}.result{display:none;font-size:12px;color:var(--warn);margin:8px 0 0;flex-basis:100%}.result:not(:empty){display:block;min-height:18px}.bar{position:sticky;top:0;z-index:5;background:var(--bar);backdrop-filter:blur(6px);display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:8px;margin-bottom:12px}
+.pageSwitch{display:inline-flex;justify-content:flex-start;align-items:center;gap:8px;margin:4px 0 0 auto;font-size:13px;color:var(--muted);min-height:36px}.pollSwitch{display:inline-flex;gap:8px;align-items:center;min-height:0;margin:0 0 0 10px;color:var(--muted);font-size:13px;font-weight:400}.pollSwitch input{width:40px;height:24px;min-width:40px}.pollSwitch input:before{width:18px;height:18px}.pollSwitch input:checked:before{left:18px}.hidden{display:none!important}
+@media(min-width:900px){body{padding:16px 18px}.page{display:block;columns:2 430px;column-gap:12px}.page>.card{break-inside:avoid;margin:0 0 12px}.page>.wide{column-span:all}}
+@media(max-width:520px){body{padding:10px}h1{font-size:18px}.card{padding:11px;border-radius:9px}button,.linkbtn{width:100%;margin:4px 0 0}.pageSwitch{width:100%;margin-left:0}.kv{gap:8px;flex-wrap:wrap}.kv span:first-child{flex:1 1 34%}.kv span:last-child{flex:1 1 58%;max-width:100%}label{align-items:center;flex-wrap:wrap;overflow-wrap:anywhere}label select{flex-basis:100%;min-width:0}label input[type=number]{margin-left:auto}}
 </style></head><body>
 <h1>T-2CAN FSD 运行参数</h1>
 
 <div class="card bar">
-<button onclick="applyConfig()">应用到内存</button>
-<button class="alt" onclick="saveConfig()">保存到 Flash</button>
-<button class="warn" onclick="webOff()">关闭 WebUI</button>
+<button class="alt" onclick="saveConfig()">保存</button>
+<button class="warn" onclick="rebootBoard()">重启</button>
+<button class="ghost" id="themeBtn" onclick="toggleTheme()">日间</button>
 <label class="pageSwitch">诊断信息页<input type="checkbox" id="diagPageSwitch" onchange="setDiagPage(this.checked)"></label>
 <div class="result" id="testResult"></div>
 </div>
 
 <div id="mainPage" class="page">
 
-<div class="card">
+<div class="card wide">
 <h2>通道定义</h2>
 <p class="hint">官方 LILYGO T-2CAN V1.0：物理 CANA = MCP2515/SPI；物理 CANB = ESP32-S3 原生 TWAI。当前固件 CSV：bus=1/TWAI/物理CANB，bus=2/MCP2515/物理CANA。</p>
 <p class="hint">车机连接本热点后手动打开 http://100.100.1.1；固件会对 connman.vn.cloud.tesla.cn 和 www.tesla.cn 联网检测做本地在线应答。</p>
@@ -71,7 +82,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <h2>免打扰</h2>
 <label>持续滚轮免打扰<input type="checkbox" id="dndEnabled"></label>
 <label>Nag-Killer联动滚轮免打扰<input type="checkbox" id="nagKillerDndEnabled"></label>
-<p class="hint">持续滚轮：FSD/AP 激活后随机 1-5 秒自动音量加减恢复。Nag-Killer联动：识别 0x399 hands-on state 2..6 后触发 3 次。两者都复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 50ms，默认关闭。</p>
+<p class="hint">持续滚轮：FSD/AP 激活后随机 1-5 秒自动音量加减恢复。Nag-Killer联动：识别 0x399 hands-on state 2..5 后触发 1 次；回到 0/1 会停止待触发动作，需稳定离开约2秒后才允许再次触发。两者都复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 50ms，默认关闭。</p>
 </div>
 
 <div class="card">
@@ -93,7 +104,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <h3>Mode C 扭矩 Nm</h3>
 <label>负端<span class="signed"><b>-</b><input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
 <label>正端<span class="signed"><b>+</b><input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。Nag-Killer联动滚轮开关打开后，识别到 0x399 hands-on state 2..6 会触发 3 次音量滚轮免打扰。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
+<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。Nag-Killer联动滚轮开关打开后，识别到 0x399 hands-on state 2..5 会触发 1 次音量滚轮免打扰，回到 0/1 会停止待触发动作，稳定离开约2秒后才会重新触发。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
 </div>
 
 <div class="card">
@@ -135,14 +146,16 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 
 <div id="diagPage" class="page hidden">
 
-<div class="card">
-<h2>诊断信息 <label style="display:inline;font-size:13px">轮询<input type="checkbox" id="poll" onchange="setPolling(this.checked)"></label></h2>
+<div class="card wide">
+<h2>诊断信息 <label class="pollSwitch">轮询<input type="checkbox" id="poll" onchange="setPolling(this.checked)"></label></h2>
 <h3>自动诊断</h3>
 <div class="kv"><span>系统健康</span><span id="autoDiagLevel">-</span></div>
 <div class="kv"><span>诊断原因</span><span id="autoDiagReasons">-</span></div>
 <div class="kv"><span>建议动作</span><span id="autoDiagAdvice">-</span></div>
-<h3>CAN 总线</h3>
-<h3>开发板诊断</h3>
+</div>
+
+<div class="card">
+<h2>开发板诊断</h2>
 <p class="hint">CPU%已扣除TWAI等待时间；loop最大耗时超过5ms、TX最大耗时超过2ms、TWAI missed/overrun新增、MCP2515 overflow新增，说明实时性需要重点看。</p>
 <div class="kv"><span>窗口ms / CPU MHz</span><span><b id="diagWindowMs">-</b> / <b id="cpuMhz">-</b></span></div>
 <div class="kv"><span>loop Hz / CPU%</span><span><b id="loopHz">-</b> / <b id="cpuPct">-</b></span></div>
@@ -151,6 +164,11 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>WebUI最大 us</span><span id="webTaskMaxUs">-</span></div>
 <div class="kv"><span>内存可用% / 历史最低%</span><span><b id="freeHeapPct">-</b> / <b id="minFreeHeapPct">-</b></span></div>
 <div class="kv"><span>heap总量/可用/历史最低</span><span><b id="totalHeapBytes">-</b> / <b id="freeHeapBytes">-</b> / <b id="minFreeHeapBytes">-</b></span></div>
+</div>
+
+<div class="card">
+<h2>CAN 总线</h2>
+<h3>bus=1 / TWAI / 物理CANB</h3>
 <div class="kv"><span>bus=1 RX</span><span id="can1Rx">-</span></div>
 <div class="kv"><span>bus=1 TX</span><span id="can1Tx">-</span></div>
 <div class="kv"><span>bus=1 TX fail</span><span id="can1TxFail">-</span></div>
@@ -162,6 +180,7 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>TWAI RX/TX队列 最大</span><span><b id="twaiRxQueueMax">-</b> / <b id="twaiTxQueueMax">-</b></span></div>
 <div class="kv"><span>TWAI missed/overrun/busErr</span><span><b id="twaiRxMissed">-</b> / <b id="twaiRxOverrun">-</b> / <b id="twaiBusError">-</b></span></div>
 <div class="kv"><span>TWAI txFailed / txErr/rxErr</span><span><b id="twaiTxFailed">-</b> / <b id="twaiTxErr">-</b> / <b id="twaiRxErr">-</b></span></div>
+<h3>bus=2 / MCP2515 / 物理CANA</h3>
 <div class="kv"><span>MCP2515 ready</span><span id="canbReady">-</span></div>
 <div class="kv"><span>MCP2515 filter mode</span><span id="canbHardwareFilterMode">-</span></div>
 <div class="kv"><span>MCP2515 RX / TX / fail</span><span><b id="canbRx">-</b> / <b id="canbTx">-</b> / <b id="canbTxFail">-</b></span></div>
@@ -171,11 +190,18 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>MCP2515 drain最大帧数</span><span id="canbDrainMaxFrames">-</span></div>
 <div class="kv"><span>MCP2515 last ID</span><span id="canbLastId">-</span></div>
 <div class="kv"><span>MCP2515 EFLG / RX overflow</span><span><b id="canbErrorFlags">-</b> / <b id="canbRxOverflowCount">-</b></span></div>
-<h3>速度 / FSD</h3>
+</div>
+
+<div class="card">
+<h2>速度 / FSD</h2>
 <div class="kv"><span>融合限速 kph</span><span id="fusedLimitKph">-</span></div>
 <div class="kv"><span>目标速度 kph</span><span id="targetSpeedKph">-</span></div>
 <div class="kv"><span>速度偏移 kph/raw</span><span><b id="offsetKph">-</b> / <b id="offsetRaw">-</b></span></div>
-<h3>灯光 / 预热</h3>
+</div>
+
+<div class="card">
+<h2>灯光 / 预热</h2>
+<h3>灯光强制</h3>
 <div class="kv"><span>FSD灯光强制 / 阻断</span><span><b id="fsdLightForceActive">-</b> / <b id="fsdLightForceBlocked">-</b></span></div>
 <div class="kv"><span>FSD灯光TX / fail / 距今ms</span><span><b id="fsdLightForceTxCount">-</b> / <b id="fsdLightForceTxFail">-</b> / <b id="fsdLightForceLastTxAgeMs">-</b></span></div>
 <div class="kv"><span>灯光条件 开关/CANB/0x399/AP/0x3E9</span><span><b id="fsdLightForceSwitchOn">-</b> / <b id="fsdLightForceCanbOk">-</b> / <b id="fsdLightForce399Fresh">-</b> / <b id="fsdLightForceApActive">-</b> / <b id="fsdLightForce3e9Fresh">-</b></span></div>
@@ -198,13 +224,16 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>车辆预热状态 / 请求加热</span><span><b id="batteryPreheatUiState">-</b> / <b id="batteryPreheatUiRequestHeat">-</b></span></div>
 <div class="kv"><span>导航快充 / 快充类型 / 行程规划</span><span><b id="batteryPreheatUiNavToSupercharger">-</b> / <b id="batteryPreheatUiFastChargerType">-</b> / <b id="batteryPreheatUiTripActive">-</b></span></div>
 <div class="kv"><span>预热功率 / 目标温度</span><span><b id="batteryPreheatUiPowerW">-</b> / <b id="batteryPreheatUiTargetCx100">-</b></span></div>
-<h3>电池温度</h3>
+<h3>电池温度 / 冷却</h3>
 <div class="kv"><span>电池温度 最低/平均/最高</span><span><b id="bmsTempMinCx100">-</b> / <b id="bmsTempAvgCx100">-</b> / <b id="bmsTempMaxCx100">-</b></span></div>
 <div class="kv"><span>电池温度更新时间</span><span id="bmsTempDecodedAgeMs">-</span></div>
-<h3>冷却 / 环境</h3>
 <div class="kv"><span>冷却环境数据 / 来源 / 更新时间</span><span><b id="batteryPreheatVcfrontSeen">-</b> / <b id="batteryPreheatVcfrontBus">-</b> / <b id="batteryPreheatVcfrontAgeMs">-</b></span></div>
 <div class="kv"><span>冷却液温度 电池/电驱</span><span><b id="batteryPreheatVcfrontCoolantBatInletCx100">-</b> / <b id="batteryPreheatVcfrontCoolantPtInletCx100">-</b></span></div>
 <div class="kv"><span>环境温度 当前/过滤</span><span><b id="batteryPreheatVcfrontAmbientCx100">-</b> / <b id="batteryPreheatVcfrontAmbientFilteredCx100">-</b></span></div>
+</div>
+
+<div class="card">
+<h2>免打扰 / Nag-Killer</h2>
 <h3>免打扰</h3>
 <div class="kv"><span>hands-on 0x399 / 警告</span><span><b id="dndHandsOnState">-</b> / <b id="dndWarningActive">-</b></span></div>
 <div class="kv"><span>动作 / 类型 / 阻止</span><span><b id="dndActionActive">-</b> / <b id="dndActionType">-</b> / <b id="dndBlocked">-</b></span></div>
@@ -218,7 +247,12 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 <div class="kv"><span>AP / hands-on / 目标Ho</span><span><b id="nagKillerApState">-</b> / <b id="nagKillerHandsOnState">-</b> / <b id="nagKillerTargetHandsOn">-</b></span></div>
 <div class="kv"><span>实车扭矩 / 注入扭矩</span><span><b id="nagKillerRealTorqueCx100">-</b> / <b id="nagKillerLastTorqueCx100">-</b></span></div>
 <div class="kv"><span>方向盘角度 / AP年龄 / 转角年龄</span><span><b id="nagKillerSteeringDegCx10">-</b> / <b id="nagKillerApAgeMs">-</b> / <b id="nagKillerSteeringAgeMs">-</b></span></div>
-<div class="kv"><span>NAG滚轮剩余 / 次数 / 距今ms</span><span><b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b> / <b id="nagKillerDndLastTriggerAgeMs">-</b></span></div>
+<div class="kv"><span>NAG滚轮剩余动作 / 触发次数 / 距今ms</span><span><b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b> / <b id="nagKillerDndLastTriggerAgeMs">-</b></span></div>
+</div>
+
+<div class="card">
+<h2>休眠 / 换挡</h2>
+<h3>锁车休眠</h3>
 <div class="kv"><span>锁车休眠 / 来源 / 距今ms</span><span><b id="lockSleepTriggered">-</b> / <b id="lockSleepSource">-</b> / <b id="lockSleepAgeMs">-</b></span></div>
 <div class="kv"><span>锁车休眠最后ID / 已启用</span><span><b id="lockSleepLastId">-</b> / <b id="lockSleepArmed">-</b></span></div>
 <div class="kv"><span>0x339 简化锁状态 / 距今ms</span><span><b id="lockSleep339SimpleStatus">-</b> / <b id="lockSleep339AgeMs">-</b></span></div>
@@ -240,6 +274,12 @@ button.alt,.linkbtn{background:#37c}button.warn{background:#a33}.linkbtn{display
 
 <script>
 let pollTimer=null,recTimer=null,loaded=false,lastDiag=null;
+function getStoredTheme(){try{return localStorage.getItem("theme")||""}catch(e){return ""}}
+function setStoredTheme(t){try{localStorage.setItem("theme",t)}catch(e){}}
+function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")return t;const h=(new Date()).getHours();return h>=7&&h<19?"light":"dark"}
+function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
+function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
+applyTheme(preferredTheme());
 const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","cabinCameraTelemetryDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","fsdForceHeadlightEnabled","fsdForceHighBeamEnabled","batteryPreheatEnabled","batteryPreheatForceTestEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
 const stats=["diagWindowMs","cpuMhz","loopHz","cpuPct","loopBusyPct","loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","totalHeapBytes","freeHeapBytes","minFreeHeapBytes","freeHeapPct","minFreeHeapPct","can1Rx","can1Tx","can1TxFail","can1RxRate","can1TxRate","can1TxFailRate","can1RxGapMaxUs","can1TxMaxUs","can1TxSlowCount","twaiState","twaiBusOffCount","twaiRxQueue","twaiTxQueue","twaiRxQueueMax","twaiTxQueueMax","twaiRxMissed","twaiRxOverrun","twaiBusError","twaiTxFailed","twaiTxErr","twaiRxErr","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbRxRate","canbTxRate","canbTxFailRate","canbRxGapMaxUs","canbTxMaxUs","canbTxSlowCount","canbDrainMaxUs","canbDrainMaxFrames","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","fsdLightForceActive","fsdLightForceBlocked","fsdLightForceTxCount","fsdLightForceTxFail","fsdLightForceLastTxAgeMs","fsdLightForceBodyAgeMs","fsdLightForceHeadlightRequest","fsdLightForceHighBeamDecision","fsdLightForceBodyCounter","fsdLightFeedbackAgeMs","fsdLightLowBeamLeftStatus","fsdLightHighBeamLeftStatus","batteryPreheatActive","batteryPreheatTxCount","batteryPreheatAgeMs","batteryPreheatRunMs","batteryPreheatStableTempMs","batteryPreheatAutoOffReason","batteryPreheatAutoOffLatched","batteryPreheatChargeDetected","batteryPreheatSocPct","batteryPreheatSocAgeMs","batteryPreheatFeedbackSeen","batteryPreheatFeedbackBus","batteryPreheatFeedbackAgeMs","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatFeedbackPayload","dndHandsOnState","dndWarningActive","dndActionActive","dndActionType","dndBlocked","dndTxCount","dndLastTriggerAgeMs","dndScrollCacheAgeMs","nagKillerMode","nagKillerActive","nagKillerBlocked","nagKillerBurstActive","nagKillerTargetId","nagKillerRxCount","nagKillerTxCount","nagKillerTxFail","nagKillerLastRxAgeMs","nagKillerLastTxAgeMs","nagKillerApAgeMs","nagKillerSteeringAgeMs","nagKillerApState","nagKillerHandsOnState","nagKillerTargetHandsOn","nagKillerSetHandsOn","nagKillerRealTorqueCx100","nagKillerLastTorqueCx100","nagKillerSteeringDegCx10","nagKillerDndRemaining","nagKillerDndTriggerCount","nagKillerDndLastTriggerAgeMs","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","bmsTempDecodedSeen","bmsTempDecodedMux","bmsTempDecodedCount","bmsTempDecodedAgeMs","bmsTempLatest1Cx100","bmsTempLatest2Cx100","bmsTempLatest3Cx100","bmsTempMinCx100","bmsTempAvgCx100","bmsTempMaxCx100","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339AgeMs","lockSleepCabinEmpty","lockSleep339StableAgeMs","lockSleepBlocked","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
 const statIds={nagKillerMode:"nagKillerModeText"};
@@ -363,15 +403,14 @@ function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementBy
 function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);p.set(k,getVal(e))});return p}
-function applyConfig(){fetch("/config",{method:"POST",body:body()}).then(async r=>{showResult(await r.text());pollStatus()})}
 function saveConfig(){fetch("/config",{method:"POST",body:body()}).then(()=>fetch("/save",{method:"POST"})).then(async r=>{showResult(await r.text());pollStatus()})}
+function rebootBoard(){setPolling(false);const p=document.getElementById("poll");if(p)p.checked=false;showResult("正在重启...");fetch("/reboot",{method:"POST"}).catch(()=>{})}
 function recQuery(){const ids=document.getElementById("recIds").value.trim();return ids?("?ids="+encodeURIComponent(ids)):""}
 function stopReason(v){return v===1?"满":(v===2?"超时":"手动/无")}
 function setRecUi(j){const active=j&&j.active;document.getElementById("recState").textContent=active?"抓包中":(j&&j.saved?"已保存":"空闲");document.getElementById("recCount").textContent=j?(j.count+" / "+j.cap):"-";document.getElementById("recBus1").textContent=j?j.bus1:"-";document.getElementById("recBus2").textContent=j?j.bus2:"-";document.getElementById("recDrop").textContent=j?(j.dropped+" / "+stopReason(j.stopReason)):"-";document.getElementById("recPsram").textContent=j?((j.psram?"可用":"不可用")+" / "+Math.round((j.bytes||0)/1024)+" KB"):"-";document.getElementById("recDownload").style.display=(!active&&j&&j.saved)?"inline-block":"none"}
 function pollRec(){fetch("/rec_status").then(r=>r.json()).then(setRecUi).catch(()=>{})}
 function startRec(){fetch("/rec_start"+recQuery(),{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(!recTimer)recTimer=setInterval(pollRec,800)})}
 function stopRec(){fetch("/rec_stop",{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(recTimer){clearInterval(recTimer);recTimer=null}})}
-function webOff(){setPolling(false);document.getElementById("poll").checked=false;fetch("/web/off",{method:"POST"})}
 pollStatus();pollRec();
 </script>
 </body></html>)HTML";

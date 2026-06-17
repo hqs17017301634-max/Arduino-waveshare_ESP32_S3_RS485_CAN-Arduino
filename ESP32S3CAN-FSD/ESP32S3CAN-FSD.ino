@@ -49,6 +49,7 @@ struct can_frame {
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <esp_netif.h>
 #endif
 
 // This build supports the HW3 car only.
@@ -145,8 +146,9 @@ constexpr uint16_t NAG_KILLER_TORQUE_RAW_MIN =
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_MAX =
     NAG_KILLER_TORQUE_RAW_BASE + NAG_KILLER_TORQUE_MAX_CX100;
 constexpr uint8_t NAG_DND_HANDS_MIN = 2;
-constexpr uint8_t NAG_DND_HANDS_MAX = 6;
-constexpr uint8_t NAG_DND_ACTION_COUNT = 3;
+constexpr uint8_t NAG_DND_HANDS_MAX = 5;
+constexpr uint8_t NAG_DND_ACTION_COUNT = 1;
+constexpr uint16_t NAG_DND_REARM_SAFE_MS = 2000;
 
 // ---- Runtime configuration (WebUI-tunable; defaults match the legacy constants) ----
 // CAN A reads this every relevant frame, so updates must stay cheap. The legacy
@@ -181,7 +183,7 @@ struct RuntimeConfig {
   bool dndEnabled = false;             // continuous left scroll up/down on 0x3C2
   bool dndVolumeEnabled = false;       // legacy mirror for old saved configs
   bool nagKillerEnabled = false;       // experimental steering torque echo
-  bool nagKillerDndEnabled = false;    // 0x399 hands-on 2..6 triggers three scroll DND actions
+  bool nagKillerDndEnabled = false;    // 0x399 hands-on 2..5 triggers one scroll DND action
   bool nagKillerTest052Enabled = false; // force-send configured 0x052 torque on live target frames
   bool nagKillerTest370Enabled = false; // force-send configured 0x370 torque on live target frames
   uint8_t nagKillerMode = NAG_KILLER_MODE_B; // 1=Mode B, 2=Mode C, 3=doc state machine
@@ -668,6 +670,7 @@ static uint32_t nagKillerDndNextActionMs = 0;
 static uint32_t nagKillerDndLastTriggerMs = 0;
 static uint32_t nagKillerDndTriggerCount = 0;
 static bool nagKillerDndHandsRangeActive = false;
+static uint32_t nagKillerDndSafeSinceMs = 0;
 static uint32_t bms712TempLastRxMs = 0;
 static uint32_t bmsTempDecodedLastRxMs = 0;
 static int16_t bms712TempCx100[12] = {};
@@ -1382,6 +1385,12 @@ static void triggerNagKillerDndBurst(uint32_t now) {
   g_status.nagKillerDndTriggerCount = nagKillerDndTriggerCount;
 }
 
+static void clearNagKillerDndPendingActions() {
+  nagKillerDndRemainingActions = 0;
+  nagKillerDndNextActionMs = 0;
+  g_status.nagKillerDndRemaining = 0;
+}
+
 static uint8_t nagKillerChecksum(const can_frame& frame) {
   uint16_t sum = 0;
   for (uint8_t i = 0; i < 7; ++i) sum += frame.data[i];
@@ -1417,15 +1426,25 @@ static void handleNagKillerContextFrame(const can_frame& frame) {
     const bool handsStateTriggersDnd = nagKillerHandsStateTriggersDnd(handsOnState);
     if (!cfg.nagKillerDndEnabled) {
       nagKillerDndHandsRangeActive = false;
-      nagKillerDndRemainingActions = 0;
-      g_status.nagKillerDndRemaining = 0;
+      nagKillerDndSafeSinceMs = 0;
+      clearNagKillerDndPendingActions();
     } else if (handsStateTriggersDnd) {
+      nagKillerDndSafeSinceMs = 0;
       if (!nagKillerDndHandsRangeActive) {
         triggerNagKillerDndBurst(now);
       }
       nagKillerDndHandsRangeActive = true;
     } else {
-      nagKillerDndHandsRangeActive = false;
+      if (handsOnState <= 1) clearNagKillerDndPendingActions();
+      if (nagKillerDndHandsRangeActive) {
+        if (nagKillerDndSafeSinceMs == 0) nagKillerDndSafeSinceMs = now;
+        if ((now - nagKillerDndSafeSinceMs) >= NAG_DND_REARM_SAFE_MS) {
+          nagKillerDndHandsRangeActive = false;
+          nagKillerDndSafeSinceMs = 0;
+        }
+      } else {
+        nagKillerDndSafeSinceMs = 0;
+      }
     }
 
     if (handsOnState != nagKillerHandsOnState) {
@@ -3836,6 +3855,7 @@ static WebServer server(80);
 static DNSServer dnsServer;
 static volatile bool webUiEnabled = true;
 static volatile bool webUiShutdownPending = false;
+static volatile bool webUiRebootPending = false;
 static Preferences prefs;
 static const IPAddress WEBUI_AP_IP(100, 100, 1, 1);
 static const IPAddress WEBUI_AP_NETMASK(255, 255, 255, 0);
@@ -3864,7 +3884,8 @@ static String normalizedHttpHost() {
 }
 
 static bool isTeslaConnectivityHost(const String& host) {
-  return host == TESLA_CONNMAN_HOST || host == TESLA_WWW_HOST || host == TESLA_ROOT_HOST;
+  return host == TESLA_CONNMAN_HOST || host == TESLA_WWW_HOST || host == TESLA_ROOT_HOST ||
+         host.endsWith(".tesla.cn");
 }
 
 static bool isTeslaConnectivityUri(String uri) {
@@ -3901,13 +3922,32 @@ static void sendTeslaConnectivityResponse() {
   server.send(200, "text/html", TESLA_CONNMAN_ONLINE_BODY);
 }
 
+static bool isGenericConnectivityHost(const String& host) {
+  return host == "connectivitycheck.gstatic.com" || host == "clients3.google.com" ||
+         host == "connectivitycheck.android.com" || host == "captive.apple.com" ||
+         host == "www.msftconnecttest.com" || host == "msftconnecttest.com";
+}
+
+static bool isWebUiHost(const String& host) {
+  return host.length() == 0 || host == WEBUI_AP_IP.toString();
+}
+
+static void sendGenericConnectivityResponse() {
+  sendNoCacheHeader();
+  if (server.method() == HTTP_HEAD) {
+    server.setContentLength(0);
+    server.send(204, "text/plain", "");
+    return;
+  }
+  server.send(204, "text/plain", "");
+}
+
 static void handleConnectivityProbe() {
   if (isTeslaConnectivityRequest()) {
     sendTeslaConnectivityResponse();
     return;
   }
-  sendNoCacheHeader();
-  server.send(204, "text/plain", "");
+  sendGenericConnectivityResponse();
 }
 
 #include "web_ui_page.h"  // kIndexHtml -- kept out of the .ino prototype scanner
@@ -3915,6 +3955,10 @@ static void handleConnectivityProbe() {
 static void handleRoot() {
   if (isTeslaConnectivityRequest()) {
     sendTeslaConnectivityResponse();
+    return;
+  }
+  if (isGenericConnectivityHost(normalizedHttpHost())) {
+    sendGenericConnectivityResponse();
     return;
   }
   server.send_P(200, "text/html", kIndexHtml);
@@ -3927,11 +3971,38 @@ static void handleCaptivePortalOrNotFound() {
   }
 
   if (server.method() == HTTP_GET || server.method() == HTTP_HEAD) {
-    handleConnectivityProbe();
+    const String host = normalizedHttpHost();
+    if (isGenericConnectivityHost(host) || isTeslaConnectivityUri(server.uri())) {
+      handleConnectivityProbe();
+      return;
+    }
+    if (!isWebUiHost(host)) {
+      sendGenericConnectivityResponse();
+      return;
+    }
+    server.sendHeader("Location", String("http://") + WEBUI_AP_IP.toString() + "/");
+    server.send(302, "text/plain", "");
     return;
   }
 
   server.send(404, "text/plain", "Not found");
+}
+
+static void configureSoftApDhcpDns() {
+  esp_netif_t* apNetif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+  if (!apNetif) return;
+  esp_netif_dhcp_status_t dhcpStatus = ESP_NETIF_DHCP_STOPPED;
+  const bool wasStarted =
+      esp_netif_dhcps_get_status(apNetif, &dhcpStatus) == ESP_OK &&
+      dhcpStatus == ESP_NETIF_DHCP_STARTED;
+  if (wasStarted) esp_netif_dhcps_stop(apNetif);
+  esp_netif_dns_info_t dns = {};
+  dns.ip.type = ESP_IPADDR_TYPE_V4;
+  esp_netif_set_ip4_addr(&dns.ip.u_addr.ip4, 100, 100, 1, 1);
+  esp_netif_set_dns_info(apNetif, ESP_NETIF_DNS_MAIN, &dns);
+  esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
+                         &dns.ip.u_addr.ip4.addr, sizeof(dns.ip.u_addr.ip4.addr));
+  if (wasStarted) esp_netif_dhcps_start(apNetif);
 }
 
 static void handleStatus() {
@@ -4396,6 +4467,12 @@ static void handleWebOff() {
   webUiShutdownPending = true;
 }
 
+// POST /reboot -- acknowledge first, then restart from the WebUI task.
+static void handleReboot() {
+  server.send(200, "application/json", "{\"ok\":true}");
+  webUiRebootPending = true;
+}
+
 static void handleCanBTest() {
 #ifdef ENABLE_CANB_MCP2515
   RuntimeConfig c = configSnapshot();
@@ -4619,7 +4696,7 @@ static void loadConfigFromPrefs() {
                                            prefs.getBool("dndVol", c.dndVolumeEnabled));
   c.dndVolumeEnabled       = c.dndEnabled;
   c.nagKillerEnabled       = prefs.getBool("nagEn", c.nagKillerEnabled);
-  c.nagKillerDndEnabled    = prefs.getBool("nagDnd", c.nagKillerEnabled);
+  c.nagKillerDndEnabled    = prefs.getBool("nagDnd", c.nagKillerDndEnabled);
   c.nagKillerTest052Enabled = prefs.getBool("nagT052", c.nagKillerTest052Enabled);
   c.nagKillerTest370Enabled = prefs.getBool("nagT370", c.nagKillerTest370Enabled);
   c.nagKillerMode          = normalizeNagKillerMode(prefs.getUChar("nagMode", c.nagKillerMode));
@@ -4698,6 +4775,7 @@ static void setupLightWebUi() {
   // SoftAP IP / gateway = 100.100.1.1 (subnet 255.255.255.0). Must precede softAP().
   WiFi.softAPConfig(WEBUI_AP_IP, WEBUI_AP_IP, WEBUI_AP_NETMASK);
   WiFi.softAP(WEBUI_AP_SSID, WEBUI_AP_PASS);
+  configureSoftApDhcpDns();
   dnsServer.start(WEBUI_DNS_PORT, "*", WEBUI_AP_IP);
   server.on("/", HTTP_ANY, handleRoot);
   server.on("/generate_204", HTTP_ANY, handleConnectivityProbe);
@@ -4712,6 +4790,7 @@ static void setupLightWebUi() {
   server.on("/rec_status", HTTP_GET, handleRecStatus);
   server.on("/rec_download", HTTP_GET, handleRecDownload);
   server.on("/web/off", HTTP_POST, handleWebOff);
+  server.on("/reboot", HTTP_POST, handleReboot);
   server.onNotFound(handleCaptivePortalOrNotFound);
   server.begin();
   webUiEnabled = true;
@@ -4721,6 +4800,10 @@ static void setupLightWebUi() {
 // core 1 never waits on this; HTTP is only serviced while the WebUI is enabled.
 static void webTask(void*) {
   for (;;) {
+    if (webUiRebootPending) {
+      delay(150);
+      ESP.restart();
+    }
     if (webUiShutdownPending) {
       delay(50);
       server.stop();
