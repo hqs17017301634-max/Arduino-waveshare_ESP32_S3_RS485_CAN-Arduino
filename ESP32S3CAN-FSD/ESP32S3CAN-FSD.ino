@@ -152,6 +152,14 @@ constexpr uint8_t NAG_DND_HANDS_ESCALATED_MIN = 9;
 constexpr uint8_t NAG_DND_HANDS_ESCALATED_MAX = 10;
 constexpr uint8_t NAG_DND_ACTION_COUNT = 2;
 constexpr uint16_t NAG_DND_REARM_SAFE_MS = 2000;
+constexpr uint8_t UI_HANDS_REQ_BLOCK_NONE = 0;
+constexpr uint8_t UI_HANDS_REQ_BLOCK_DISABLED = 1;
+constexpr uint8_t UI_HANDS_REQ_BLOCK_NO_FRAME = 2;
+constexpr uint8_t UI_HANDS_REQ_BLOCK_STALE_FRAME = 3;
+constexpr uint8_t UI_HANDS_REQ_BLOCK_BAD_DLC = 4;
+constexpr uint8_t UI_HANDS_REQ_BLOCK_CAN1_RX_ONLY = 5;
+constexpr uint8_t UI_HANDS_REQ_BLOCK_TX_FAIL = 6;
+constexpr uint16_t UI_HANDS_REQ_FRAME_MAX_AGE_MS = 1000;
 
 // ---- Runtime configuration (WebUI-tunable; defaults match the legacy constants) ----
 // CAN A reads this every relevant frame, so updates must stay cheap. The legacy
@@ -161,7 +169,6 @@ struct RuntimeConfig {
   bool fsdEnabled = true;
   bool autoSpeedOffsetEnabled = true;
   bool cabinCameraDisableEnabled = false; // when enabled, write 0x3FD mux1 bit43 to 0
-  bool cabinCameraTelemetryDisableEnabled = false; // when enabled, write 0x3FD mux1 bit48 to 0
   uint8_t slewPctPerSec = 5;
   uint8_t lowSpeedMaxPctRaw = 200;    // = MAX_SPEED_OFFSET_PCT * OFFSET_PCT4_RAW_PER_PCT
 
@@ -181,9 +188,8 @@ struct RuntimeConfig {
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool fsdForceHeadlightEnabled = false; // AP/FSD-active 0x3E9 headlightRequest=ON
   bool fsdForceHighBeamEnabled = false;  // AP/FSD-active 0x3E9 highLowBeamDecision=ON
-  bool fsdSuppressAutoHeadlightEnabled = false; // AP/FSD-active 0x3E9 headlightRequest=OFF
+  bool uiHandsOnReqDisableZeroEnabled = false; // when enabled, write 0x3F8 bit14 to 0
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
-  bool batteryPreheatForceTestEnabled = false; // RAM-only test: bypass logical auto-off guards
   bool dndEnabled = false;             // continuous left scroll up/down on 0x3C2
   bool dndVolumeEnabled = false;       // legacy mirror for old saved configs
   bool nagKillerEnabled = false;       // experimental steering torque echo
@@ -343,8 +349,18 @@ struct RuntimeStatus {
   uint8_t fsdLightHighBeamRejectAmbient = 255;
   uint8_t fsdLightHighBeamRejectHeadlight = 255;
   uint8_t fsdLightHighBeamRejectSna = 255;
+  uint8_t uiHandsOnReqActive = 0;
+  uint8_t uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_DISABLED;
+  uint8_t uiHandsOnReqSeen = 0;
+  uint8_t uiHandsOnReqDlc = 0;
+  uint8_t uiHandsOnReqLiveValue = 255;
+  uint8_t uiHandsOnReqSentValue = 255;
+  uint32_t uiHandsOnReqTargetId = 0;
+  uint32_t uiHandsOnReqRxAgeMs = 0;
+  uint32_t uiHandsOnReqTxCount = 0;
+  uint32_t uiHandsOnReqTxFail = 0;
+  uint32_t uiHandsOnReqLastTxAgeMs = 0;
   uint8_t batteryPreheatActive = 0;
-  uint8_t batteryPreheatForceTestActive = 0;
   uint32_t batteryPreheatTxCount = 0;
   uint32_t batteryPreheatAgeMs = 0;
   uint32_t batteryPreheatRunMs = 0;
@@ -370,6 +386,7 @@ struct RuntimeStatus {
   uint8_t batteryPreheatUiFastChargerType = 0;
   uint8_t batteryPreheatUiState = 0;
   uint8_t batteryPreheatUiRequestHeat = 0;
+  uint8_t batteryPreheatHeatingActive = 255; // 255 = unknown until 0x082 feedback is seen
   int batteryPreheatUiPowerW = -32768;
   int batteryPreheatUiTargetCx100 = -32768;
   int batteryPreheatUiAmbientCx100 = -32768;
@@ -651,7 +668,6 @@ static uint32_t batteryPreheatLastSendMs = 0;
 static uint32_t batteryPreheatStartMs = 0;
 static uint32_t batteryPreheatTargetStableStartMs = 0;
 static bool batteryPreheatPrevEnabled = false;
-static bool batteryPreheatPrevForceTest = false;
 static bool batteryPreheatAutoOffLatched = false;
 static uint8_t batteryPreheatAutoOffReason = 0;
 static bool batteryPreheatChargeDetected = false; // Reserved until the charging-state CAN signal is validated.
@@ -677,6 +693,10 @@ static uint32_t batteryPreheatFeedbackLastRxMs = 0;
 static uint32_t batteryPreheatBmsStatusLastRxMs = 0;
 static uint32_t batteryPreheatBms332LastRxMs = 0;
 static uint32_t batteryPreheatVcfrontLastRxMs = 0;
+static uint32_t uiHandsOnReqLastRxMs = 0;
+static uint32_t uiHandsOnReqLastTxMs = 0;
+static uint32_t uiHandsOnReqTxCount = 0;
+static uint32_t uiHandsOnReqTxFailCount = 0;
 static uint32_t nagKillerLastRxMs = 0;
 static uint32_t nagKillerLastTxMs = 0;
 static uint32_t nagKillerLastApMs = 0;
@@ -861,7 +881,8 @@ static void serviceTwaiAlerts() {
 
 // ---- CAN IDs ----
 
-constexpr uint32_t CAN_ID_FOLLOW_DISTANCE = 1016;
+constexpr uint32_t CAN_ID_FOLLOW_DISTANCE = 1016; // 0x3F8 UI_driverAssistControl
+constexpr uint32_t CAN_ID_UI_DRIVER_ASSIST_CONTROL = CAN_ID_FOLLOW_DISTANCE;
 constexpr uint32_t CAN_ID_AP_CONTROL = 1021;
 constexpr uint32_t CAN_ID_UI_TRIP_PLANNING = 0x082;
 constexpr uint32_t CAN_ID_NAG_MODE_B_TARGET = 0x052;
@@ -1172,21 +1193,17 @@ static void serviceBatteryPreheatOffFrames(uint32_t now) {
 
 static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
   const uint32_t now = millis();
-  const bool forceTest = cfg.batteryPreheatForceTestEnabled;
-  const bool preheatRequested = cfg.batteryPreheatEnabled || forceTest;
+  const bool preheatRequested = cfg.batteryPreheatEnabled;
   g_status.batteryPreheatAgeMs =
       batteryPreheatLastSendMs == 0 ? 0 : (now - batteryPreheatLastSendMs);
-  g_status.batteryPreheatForceTestActive = 0;
   updateBatteryPreheatControlStatus(cfg, now);
 
 #ifdef ENABLE_CANB_MCP2515
   if (!cfg.canbEnabled || !canbIsReady() || canTxInhibitedForSleep) {
     g_status.batteryPreheatActive = 0;
-    g_status.batteryPreheatForceTestActive = 0;
     batteryPreheatLastSendMs = 0;
     batteryPreheatOffFramesLeft = 0;
     batteryPreheatPrevEnabled = false;
-    batteryPreheatPrevForceTest = false;
     batteryPreheatStartMs = 0;
     batteryPreheatTargetStableStartMs = 0;
     updateBatteryPreheatControlStatus(cfg, now);
@@ -1195,11 +1212,9 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
 #else
   if (cfg.can1ReceiveOnly || canTxInhibitedForSleep) {
     g_status.batteryPreheatActive = 0;
-    g_status.batteryPreheatForceTestActive = 0;
     batteryPreheatLastSendMs = 0;
     batteryPreheatOffFramesLeft = 0;
     batteryPreheatPrevEnabled = false;
-    batteryPreheatPrevForceTest = false;
     batteryPreheatStartMs = 0;
     batteryPreheatTargetStableStartMs = 0;
     updateBatteryPreheatControlStatus(cfg, now);
@@ -1209,12 +1224,10 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
 
   if (!preheatRequested) {
     g_status.batteryPreheatActive = 0;
-    g_status.batteryPreheatForceTestActive = 0;
     if (batteryPreheatPrevEnabled) {
       batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_USER, false);
     }
     batteryPreheatPrevEnabled = false;
-    batteryPreheatPrevForceTest = false;
     batteryPreheatAutoOffLatched = false;
     batteryPreheatStartMs = 0;
     batteryPreheatTargetStableStartMs = 0;
@@ -1223,19 +1236,16 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
     return;
   }
 
-  if (!batteryPreheatPrevEnabled || (forceTest && !batteryPreheatPrevForceTest)) {
+  if (!batteryPreheatPrevEnabled) {
     batteryPreheatPrevEnabled = true;
     batteryPreheatStartMs = now;
     batteryPreheatTargetStableStartMs = 0;
     batteryPreheatAutoOffLatched = false;
     batteryPreheatAutoOffReason = BATTERY_PREHEAT_OFF_NONE;
-    if (!forceTest) batteryPreheatChargeDetected = false;
+    batteryPreheatChargeDetected = false;
   }
-  batteryPreheatPrevForceTest = forceTest;
 
-  if (forceTest) {
-    batteryPreheatTargetStableStartMs = 0;
-  } else if (!batteryPreheatAutoOffLatched) {
+  if (!batteryPreheatAutoOffLatched) {
     if (batteryPreheatSocTooLow(now)) {
       batteryPreheatQueueOffFrames(BATTERY_PREHEAT_OFF_LOW_SOC, true);
     } else if (batteryPreheatChargeDetected) {
@@ -1261,16 +1271,14 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
     }
   }
 
-  if (!forceTest && batteryPreheatAutoOffLatched) {
+  if (batteryPreheatAutoOffLatched) {
     g_status.batteryPreheatActive = 0;
-    g_status.batteryPreheatForceTestActive = 0;
     serviceBatteryPreheatOffFrames(now);
     updateBatteryPreheatControlStatus(cfg, now);
     return;
   }
 
   g_status.batteryPreheatActive = 1;
-  g_status.batteryPreheatForceTestActive = forceTest ? 1 : 0;
   batteryPreheatOffFramesLeft = 3;  // arm OFF frames for the next disable edge
   if (batteryPreheatLastSendMs != 0 &&
       (now - batteryPreheatLastSendMs) < BATTERY_PREHEAT_PERIOD_MS) {
@@ -1859,6 +1867,57 @@ inline void setBit(can_frame& frame, int bit, bool value) {
   else frame.data[byteIndex] &= static_cast<uint8_t>(~mask);
 }
 
+static void handleUiHandsOnRequirementFrame(const can_frame& frame, const RuntimeConfig& cfg) {
+  const uint32_t now = millis();
+  uiHandsOnReqLastRxMs = now;
+  g_status.uiHandsOnReqSeen = 1;
+  g_status.uiHandsOnReqTargetId = frame.can_id;
+  g_status.uiHandsOnReqDlc = frame.can_dlc;
+
+  if (frame.can_dlc < 2) {
+    g_status.uiHandsOnReqActive = 0;
+    g_status.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_BAD_DLC;
+    return;
+  }
+
+  uint32_t raw = 0;
+  if (readBitsLE(frame, 14, 1, raw)) {
+    g_status.uiHandsOnReqLiveValue = static_cast<uint8_t>(raw & 0x01);
+  }
+
+  if (!cfg.uiHandsOnReqDisableZeroEnabled) {
+    g_status.uiHandsOnReqActive = 0;
+    g_status.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_DISABLED;
+    return;
+  }
+  if (cfg.can1ReceiveOnly) {
+    g_status.uiHandsOnReqActive = 0;
+    g_status.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_CAN1_RX_ONLY;
+    return;
+  }
+
+  can_frame out = frame;
+  setBit(out, 14, false);
+  if (twai_send(out)) {
+    uiHandsOnReqLastTxMs = now;
+    uiHandsOnReqTxCount++;
+    g_status.uiHandsOnReqActive = 1;
+    g_status.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_NONE;
+    g_status.uiHandsOnReqSentValue = 0;
+    g_status.uiHandsOnReqTxCount = uiHandsOnReqTxCount;
+  } else {
+    uiHandsOnReqTxFailCount++;
+    g_status.uiHandsOnReqActive = 0;
+    g_status.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_TX_FAIL;
+    g_status.uiHandsOnReqTxFail = uiHandsOnReqTxFailCount;
+  }
+}
+
+inline int8_t cabinCameraBit43Override(const RuntimeConfig& cfg, uint32_t now) {
+  (void)now;
+  return cfg.cabinCameraDisableEnabled ? 0 : -1;
+}
+
 inline int clampOffsetKph(int value) { return std::max(std::min(value, MAX_SPEED_OFFSET_KPH), 0); }
 
 inline uint8_t encodeSpeedOffsetRawPct4(int offsetKph, int fusedSpeedLimitKph) {
@@ -1963,6 +2022,7 @@ struct HW3Handler {
     }
 
     if (frame.can_id == CAN_ID_FOLLOW_DISTANCE) {
+      handleUiHandsOnRequirementFrame(frame, cfg);
       if (frame.can_dlc < 6) return;
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
       // Reuse the 0x3F8 follow-distance setting as the driving style selector.
@@ -1984,9 +2044,9 @@ struct HW3Handler {
       }
       if (index == 1) {
         setBit(frame, 19, false);
-        if (cfg.cabinCameraDisableEnabled) setBit(frame, 43, false);
-        if (cfg.cabinCameraTelemetryDisableEnabled) setBit(frame, 48, false);
-        // 0x3FD mux 1 keeps bit 19 clear and can optionally clear cabin camera bits.
+        const int8_t cabinCameraOverride = cabinCameraBit43Override(cfg, millis());
+        if (cabinCameraOverride >= 0) setBit(frame, 43, cabinCameraOverride != 0);
+        // 0x3FD mux 1 keeps bit 19 clear and can optionally clear the cabin camera bit.
         twai_send(frame);
       }
       if (index == 2 && cfg.fsdEnabled) {
@@ -2025,13 +2085,10 @@ static bool canbIsReady() {
 
 static uint16_t batteryPreheatComputeBlockMask(const RuntimeConfig& cfg, uint32_t now) {
   uint16_t mask = 0;
-  const bool forceTest = cfg.batteryPreheatForceTestEnabled;
-  const bool preheatRequested = cfg.batteryPreheatEnabled || forceTest;
-  if (!preheatRequested) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
+  if (!cfg.batteryPreheatEnabled) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
   if (!cfg.canbEnabled) mask |= BATTERY_PREHEAT_BLOCK_CANB_DISABLED;
   if (!canbReady) mask |= BATTERY_PREHEAT_BLOCK_CANB_NOT_READY;
   if (canTxInhibitedForSleep) mask |= BATTERY_PREHEAT_BLOCK_TX_INHIBITED;
-  if (forceTest) return mask;
   if (batteryPreheatSocTooLow(now)) mask |= BATTERY_PREHEAT_BLOCK_LOW_SOC;
   if (batteryPreheatChargeDetected) mask |= BATTERY_PREHEAT_BLOCK_CHARGING;
   if (batteryPreheatStartMs != 0 &&
@@ -2920,9 +2977,7 @@ static void serviceFsdLightForce(const RuntimeConfig& cfg) {
   g_status.fsdLightForceBodyAgeMs =
       canbLastDasBodyControlsMs == 0 ? 0 : (now - canbLastDasBodyControlsMs);
 
-  const bool suppressAutoHeadlight = cfg.fsdSuppressAutoHeadlightEnabled;
-  if (!cfg.fsdForceHeadlightEnabled && !cfg.fsdForceHighBeamEnabled &&
-      !suppressAutoHeadlight) {
+  if (!cfg.fsdForceHeadlightEnabled && !cfg.fsdForceHighBeamEnabled) {
     g_status.fsdLightForceActive = 0;
     g_status.fsdLightForceBlocked = FSD_LIGHT_BLOCK_DISABLED;
     return;
@@ -2958,7 +3013,7 @@ static void serviceFsdLightForce(const RuntimeConfig& cfg) {
     return;
   }
 
-  bool forceHighBeam = cfg.fsdForceHighBeamEnabled && !suppressAutoHeadlight;
+  bool forceHighBeam = cfg.fsdForceHighBeamEnabled;
   uint8_t protectedBlock = FSD_LIGHT_BLOCK_NONE;
   if (forceHighBeam) {
     uint32_t offReason = 0;
@@ -2989,15 +3044,9 @@ static void serviceFsdLightForce(const RuntimeConfig& cfg) {
   can_frame f = canbLastDasBodyControlsFrame;
   f.can_id = CANB_ID_DAS_BODY_CONTROLS;
   f.can_dlc = 8;
-  const uint8_t headlightRequest =
-      suppressAutoHeadlight ? 0 : static_cast<uint8_t>(1);
-  if ((suppressAutoHeadlight || cfg.fsdForceHeadlightEnabled || cfg.fsdForceHighBeamEnabled) &&
+  const uint8_t headlightRequest = 1;
+  if ((cfg.fsdForceHeadlightEnabled || cfg.fsdForceHighBeamEnabled) &&
       !writeBitsLE(f, 0, 2, headlightRequest)) {
-    g_status.fsdLightForceActive = 0;
-    g_status.fsdLightForceBlocked = FSD_LIGHT_BLOCK_DLC;
-    return;
-  }
-  if (suppressAutoHeadlight && !writeBitsLE(f, 10, 2, 0)) {
     g_status.fsdLightForceActive = 0;
     g_status.fsdLightForceBlocked = FSD_LIGHT_BLOCK_DLC;
     return;
@@ -3035,8 +3084,7 @@ static void serviceFsdLightForce(const RuntimeConfig& cfg) {
     g_status.fsdLightForceTxCount = fsdLightForceTxCount;
     g_status.fsdLightForceHeadlightRequest = headlightRequest;
     g_status.fsdLightForceHighBeamDecision =
-        suppressAutoHeadlight ? 0 :
-        (forceHighBeam ? 2 : static_cast<uint8_t>((f.data[1] >> 2) & 0x03));
+        forceHighBeam ? 2 : static_cast<uint8_t>((f.data[1] >> 2) & 0x03);
     if (forceHighBeam) g_status.fsdLightForceHighBeamOffReason = 0;
     g_status.fsdLightForceBodyCounter = counter;
   } else {
@@ -3752,7 +3800,8 @@ static void handleVcleftSwitchFrame(const can_frame& frame, const RuntimeConfig&
     }
   }
 
-  if (cfg.reverseStrobeEnabled && g_brakePedalActive && scrollEdge) {
+  if (cfg.reverseStrobeEnabled && cfg.scrollGearInjectEnabled &&
+      g_brakePedalActive && scrollEdge) {
     const uint8_t targetGear = (scrollTicks < 0) ? GEAR_R : GEAR_D;
     const bool sameGearRequest = (g_status.currentGear == targetGear);
     if (scrollTicks < 0 && !sameGearRequest) {
@@ -3931,12 +3980,9 @@ static void serviceCanBScheduledTx() {
 #ifndef ENABLE_CANB_MCP2515
 static uint16_t batteryPreheatComputeBlockMask(const RuntimeConfig& cfg, uint32_t now) {
   uint16_t mask = 0;
-  const bool forceTest = cfg.batteryPreheatForceTestEnabled;
-  const bool preheatRequested = cfg.batteryPreheatEnabled || forceTest;
-  if (!preheatRequested) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
+  if (!cfg.batteryPreheatEnabled) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
   if (cfg.can1ReceiveOnly) mask |= BATTERY_PREHEAT_BLOCK_CANB_DISABLED;
   if (canTxInhibitedForSleep) mask |= BATTERY_PREHEAT_BLOCK_TX_INHIBITED;
-  if (forceTest) return mask;
   if (batteryPreheatSocTooLow(now)) mask |= BATTERY_PREHEAT_BLOCK_LOW_SOC;
   if (batteryPreheatChargeDetected) mask |= BATTERY_PREHEAT_BLOCK_CHARGING;
   if (batteryPreheatStartMs != 0 &&
@@ -4151,6 +4197,11 @@ static void handleStatus() {
   s.batteryPreheatVcfrontAgeMs =
       batteryPreheatVcfrontLastRxMs == 0 ? 0 : (now - batteryPreheatVcfrontLastRxMs);
   s.batteryPreheatBlockMask = batteryPreheatComputeBlockMask(c, now);
+  const bool batteryPreheatFeedbackFresh =
+      batteryPreheatFeedbackLastRxMs != 0 &&
+      (now - batteryPreheatFeedbackLastRxMs) <= BATTERY_PREHEAT_TEMP_FRESH_MS;
+  s.batteryPreheatHeatingActive =
+      batteryPreheatFeedbackFresh ? (s.batteryPreheatUiState == 1 ? 1 : 0) : 255;
   s.bmsTempFrameAgeMs = bmsTempLastRxMs == 0 ? 0 : (now - bmsTempLastRxMs);
   s.bmsTempDecodedAgeMs =
       bmsTempDecodedLastRxMs == 0 ? 0 : (now - bmsTempDecodedLastRxMs);
@@ -4172,8 +4223,7 @@ static void handleStatus() {
       canbLastStwActnRqMs == 0 ? 0 : (now - canbLastStwActnRqMs);
   s.fsdLightForce399AgeMs = nagKillerLastApMs == 0 ? 0 : (now - nagKillerLastApMs);
   s.fsdLightForceSwitchOn =
-      (c.fsdForceHeadlightEnabled || c.fsdForceHighBeamEnabled ||
-       c.fsdSuppressAutoHeadlightEnabled) ? 1 : 0;
+      (c.fsdForceHeadlightEnabled || c.fsdForceHighBeamEnabled) ? 1 : 0;
   s.fsdLightForceCanbOk = (c.canbEnabled && canbReady) ? 1 : 0;
   s.fsdLightForce399Fresh = nagKillerApContextFresh(now) ? 1 : 0;
   s.fsdLightForceApState = nagKillerApState;
@@ -4214,6 +4264,30 @@ static void handleStatus() {
   s.dndLastTriggerAgeMs = dndLastTriggerMs == 0 ? 0 : (now - dndLastTriggerMs);
   s.dndScrollCacheAgeMs = canbLastVcleftMux1Ms == 0 ? 0 : (now - canbLastVcleftMux1Ms);
 #endif
+  s.uiHandsOnReqSeen = uiHandsOnReqLastRxMs != 0 ? 1 : 0;
+  s.uiHandsOnReqRxAgeMs = uiHandsOnReqLastRxMs == 0 ? 0 : (now - uiHandsOnReqLastRxMs);
+  s.uiHandsOnReqLastTxAgeMs = uiHandsOnReqLastTxMs == 0 ? 0 : (now - uiHandsOnReqLastTxMs);
+  s.uiHandsOnReqTxCount = uiHandsOnReqTxCount;
+  s.uiHandsOnReqTxFail = uiHandsOnReqTxFailCount;
+  if (!c.uiHandsOnReqDisableZeroEnabled) {
+    s.uiHandsOnReqActive = 0;
+    s.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_DISABLED;
+  } else if (!s.uiHandsOnReqSeen) {
+    s.uiHandsOnReqActive = 0;
+    s.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_NO_FRAME;
+  } else if (s.uiHandsOnReqRxAgeMs > UI_HANDS_REQ_FRAME_MAX_AGE_MS) {
+    s.uiHandsOnReqActive = 0;
+    s.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_STALE_FRAME;
+  } else if (s.uiHandsOnReqDlc < 2) {
+    s.uiHandsOnReqActive = 0;
+    s.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_BAD_DLC;
+  } else if (c.can1ReceiveOnly) {
+    s.uiHandsOnReqActive = 0;
+    s.uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_CAN1_RX_ONLY;
+  } else if (uiHandsOnReqLastTxMs == 0 ||
+             (now - uiHandsOnReqLastTxMs) > UI_HANDS_REQ_FRAME_MAX_AGE_MS) {
+    s.uiHandsOnReqActive = 0;
+  }
   s.nagKillerMode = normalizeNagKillerMode(c.nagKillerMode);
   s.nagKillerTargetId = nagKillerTargetIdForMode(s.nagKillerMode);
   if (c.nagKillerTest052Enabled && !c.nagKillerTest370Enabled) {
@@ -4238,12 +4312,11 @@ static void handleStatus() {
   }
 
   String j;
-  j.reserve(12000);
+  j.reserve(12500);
   j += '{';
   j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
   j += ",\"cabinCameraDisableEnabled\":"; j += c.cabinCameraDisableEnabled ? 1 : 0;
-  j += ",\"cabinCameraTelemetryDisableEnabled\":"; j += c.cabinCameraTelemetryDisableEnabled ? 1 : 0;
   j += ",\"slewPctPerSec\":";        j += c.slewPctPerSec;
   j += ",\"lowSpeedMaxPctRaw\":";    j += c.lowSpeedMaxPctRaw;
   j += ",\"targetBelow60\":";        j += c.targetBelow60;
@@ -4271,9 +4344,8 @@ static void handleStatus() {
   j += ",\"reverseStrobeEnabled\":"; j += c.reverseStrobeEnabled ? 1 : 0;
   j += ",\"fsdForceHeadlightEnabled\":"; j += c.fsdForceHeadlightEnabled ? 1 : 0;
   j += ",\"fsdForceHighBeamEnabled\":"; j += c.fsdForceHighBeamEnabled ? 1 : 0;
-  j += ",\"fsdSuppressAutoHeadlightEnabled\":"; j += c.fsdSuppressAutoHeadlightEnabled ? 1 : 0;
+  j += ",\"uiHandsOnReqDisableZeroEnabled\":"; j += c.uiHandsOnReqDisableZeroEnabled ? 1 : 0;
   j += ",\"batteryPreheatEnabled\":"; j += c.batteryPreheatEnabled ? 1 : 0;
-  j += ",\"batteryPreheatForceTestEnabled\":"; j += c.batteryPreheatForceTestEnabled ? 1 : 0;
   j += ",\"dndEnabled\":"; j += c.dndEnabled ? 1 : 0;
   j += ",\"dndVolumeEnabled\":"; j += c.dndVolumeEnabled ? 1 : 0;
   j += ",\"nagKillerEnabled\":"; j += c.nagKillerEnabled ? 1 : 0;
@@ -4396,8 +4468,18 @@ static void handleStatus() {
   j += ",\"fsdLightHighBeamRejectAmbient\":"; j += s.fsdLightHighBeamRejectAmbient;
   j += ",\"fsdLightHighBeamRejectHeadlight\":"; j += s.fsdLightHighBeamRejectHeadlight;
   j += ",\"fsdLightHighBeamRejectSna\":"; j += s.fsdLightHighBeamRejectSna;
+  j += ",\"uiHandsOnReqActive\":"; j += s.uiHandsOnReqActive;
+  j += ",\"uiHandsOnReqBlocked\":"; j += s.uiHandsOnReqBlocked;
+  j += ",\"uiHandsOnReqSeen\":"; j += s.uiHandsOnReqSeen;
+  j += ",\"uiHandsOnReqDlc\":"; j += s.uiHandsOnReqDlc;
+  j += ",\"uiHandsOnReqLiveValue\":"; j += s.uiHandsOnReqLiveValue;
+  j += ",\"uiHandsOnReqSentValue\":"; j += s.uiHandsOnReqSentValue;
+  j += ",\"uiHandsOnReqTargetId\":"; j += s.uiHandsOnReqTargetId;
+  j += ",\"uiHandsOnReqRxAgeMs\":"; j += s.uiHandsOnReqRxAgeMs;
+  j += ",\"uiHandsOnReqTxCount\":"; j += s.uiHandsOnReqTxCount;
+  j += ",\"uiHandsOnReqTxFail\":"; j += s.uiHandsOnReqTxFail;
+  j += ",\"uiHandsOnReqLastTxAgeMs\":"; j += s.uiHandsOnReqLastTxAgeMs;
   j += ",\"batteryPreheatActive\":"; j += s.batteryPreheatActive;
-  j += ",\"batteryPreheatForceTestActive\":"; j += s.batteryPreheatForceTestActive;
   j += ",\"batteryPreheatTxCount\":"; j += s.batteryPreheatTxCount;
   j += ",\"batteryPreheatAgeMs\":"; j += s.batteryPreheatAgeMs;
   j += ",\"batteryPreheatRunMs\":"; j += s.batteryPreheatRunMs;
@@ -4423,8 +4505,11 @@ static void handleStatus() {
   j += ",\"batteryPreheatUiFastChargerType\":"; j += s.batteryPreheatUiFastChargerType;
   j += ",\"batteryPreheatUiState\":"; j += s.batteryPreheatUiState;
   j += ",\"batteryPreheatUiRequestHeat\":"; j += s.batteryPreheatUiRequestHeat;
+  j += ",\"batteryPreheatHeatingActive\":"; j += s.batteryPreheatHeatingActive;
   j += ",\"batteryPreheatUiPowerW\":"; j += s.batteryPreheatUiPowerW;
   j += ",\"batteryPreheatUiTargetCx100\":"; j += s.batteryPreheatUiTargetCx100;
+  j += ",\"batteryPreheatCmdPowerW\":"; j += static_cast<int>(signedByte(BATTERY_PREHEAT_ON[1])) * 125;
+  j += ",\"batteryPreheatCmdTargetCx100\":"; j += BATTERY_PREHEAT_TARGET_CX100;
   j += ",\"batteryPreheatUiAmbientCx100\":"; j += s.batteryPreheatUiAmbientCx100;
   j += ",\"batteryPreheatUiChargeTargetCx10\":"; j += s.batteryPreheatUiChargeTargetCx10;
   j += ",\"batteryPreheatUiEnergyAtDestination\":"; j += s.batteryPreheatUiEnergyAtDestination;
@@ -4564,8 +4649,6 @@ static void handleConfig() {
   c.fsdEnabled              = argBool("fsdEnabled", c.fsdEnabled);
   c.autoSpeedOffsetEnabled  = argBool("autoSpeedOffsetEnabled", c.autoSpeedOffsetEnabled);
   c.cabinCameraDisableEnabled = argBool("cabinCameraDisableEnabled", c.cabinCameraDisableEnabled);
-  c.cabinCameraTelemetryDisableEnabled =
-      argBool("cabinCameraTelemetryDisableEnabled", c.cabinCameraTelemetryDisableEnabled);
   c.slewPctPerSec           = static_cast<uint8_t>(argU16("slewPctPerSec", c.slewPctPerSec));
   c.lowSpeedMaxPctRaw       = static_cast<uint8_t>(argU16("lowSpeedMaxPctRaw", c.lowSpeedMaxPctRaw));
   c.targetBelow60           = argU16("targetBelow60", c.targetBelow60);
@@ -4586,11 +4669,9 @@ static void handleConfig() {
   c.reverseStrobeEnabled    = argBool("reverseStrobeEnabled", c.reverseStrobeEnabled);
   c.fsdForceHeadlightEnabled = argBool("fsdForceHeadlightEnabled", c.fsdForceHeadlightEnabled);
   c.fsdForceHighBeamEnabled  = argBool("fsdForceHighBeamEnabled", c.fsdForceHighBeamEnabled);
-  c.fsdSuppressAutoHeadlightEnabled =
-      argBool("fsdSuppressAutoHeadlightEnabled", c.fsdSuppressAutoHeadlightEnabled);
+  c.uiHandsOnReqDisableZeroEnabled =
+      argBool("uiHandsOnReqDisableZeroEnabled", c.uiHandsOnReqDisableZeroEnabled);
   c.batteryPreheatEnabled   = argBool("batteryPreheatEnabled", c.batteryPreheatEnabled);
-  c.batteryPreheatForceTestEnabled =
-      argBool("batteryPreheatForceTestEnabled", c.batteryPreheatForceTestEnabled);
   c.dndEnabled              = argBool("dndEnabled", c.dndEnabled);
   c.dndVolumeEnabled        = c.dndEnabled;
   c.nagKillerEnabled        = argBool("nagKillerEnabled", c.nagKillerEnabled);
@@ -4859,8 +4940,6 @@ static void loadConfigFromPrefs() {
   c.fsdEnabled             = prefs.getBool("fsdEnabled", c.fsdEnabled);
   c.autoSpeedOffsetEnabled = prefs.getBool("autoOffset", c.autoSpeedOffsetEnabled);
   c.cabinCameraDisableEnabled = prefs.getBool("cabCamOff", c.cabinCameraDisableEnabled);
-  c.cabinCameraTelemetryDisableEnabled =
-      prefs.getBool("cabCamTelOff", c.cabinCameraTelemetryDisableEnabled);
   c.slewPctPerSec          = prefs.getUChar("slewPct", c.slewPctPerSec);
   c.lowSpeedMaxPctRaw      = prefs.getUChar("lowRaw", c.lowSpeedMaxPctRaw);
   c.targetBelow60          = prefs.getUShort("tB60", c.targetBelow60);
@@ -4880,10 +4959,9 @@ static void loadConfigFromPrefs() {
   c.reverseStrobeEnabled   = prefs.getBool("revStrobe", c.reverseStrobeEnabled);
   c.fsdForceHeadlightEnabled = prefs.getBool("fsdHeadOn", c.fsdForceHeadlightEnabled);
   c.fsdForceHighBeamEnabled = prefs.getBool("fsdHighOn", c.fsdForceHighBeamEnabled);
-  c.fsdSuppressAutoHeadlightEnabled =
-      prefs.getBool("fsdHeadOff", c.fsdSuppressAutoHeadlightEnabled);
-  c.batteryPreheatEnabled  = prefs.getBool("batHeat", c.batteryPreheatEnabled) ||
-                             prefs.getBool("bat082Test", false);
+  c.uiHandsOnReqDisableZeroEnabled =
+      prefs.getBool("uiHoReq0", c.uiHandsOnReqDisableZeroEnabled);
+  c.batteryPreheatEnabled  = prefs.getBool("batHeat", c.batteryPreheatEnabled);
   c.dndEnabled             = prefs.getBool("dndCont",
                                            prefs.getBool("dndEn", c.dndEnabled) &&
                                            prefs.getBool("dndVol", c.dndVolumeEnabled));
@@ -4919,7 +4997,6 @@ static void saveConfigToPrefs() {
   prefs.putBool("fsdEnabled", c.fsdEnabled);
   prefs.putBool("autoOffset", c.autoSpeedOffsetEnabled);
   prefs.putBool("cabCamOff", c.cabinCameraDisableEnabled);
-  prefs.putBool("cabCamTelOff", c.cabinCameraTelemetryDisableEnabled);
   prefs.putUChar("slewPct", c.slewPctPerSec);
   prefs.putUChar("lowRaw", c.lowSpeedMaxPctRaw);
   prefs.putUShort("tB60", c.targetBelow60);
@@ -4938,7 +5015,7 @@ static void saveConfigToPrefs() {
   prefs.putBool("revStrobe", c.reverseStrobeEnabled);
   prefs.putBool("fsdHeadOn", c.fsdForceHeadlightEnabled);
   prefs.putBool("fsdHighOn", c.fsdForceHighBeamEnabled);
-  prefs.putBool("fsdHeadOff", c.fsdSuppressAutoHeadlightEnabled);
+  prefs.putBool("uiHoReq0", c.uiHandsOnReqDisableZeroEnabled);
   prefs.putBool("batHeat", c.batteryPreheatEnabled);
   prefs.putBool("dndCont", c.dndEnabled);
   prefs.putBool("dndEn", c.dndEnabled);
