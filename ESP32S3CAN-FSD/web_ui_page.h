@@ -74,15 +74,16 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <label>倒挡双闪雾灯启用<input type="checkbox" id="reverseStrobeEnabled"></label>
 <p class="hint">R 档或 踩刹车+右滚轮后滚 触发 hazard + 后雾灯；右滚轮前滚视为 D 意图并取消。</p>
 <label>强制自动前大灯<input type="checkbox" id="fsdForceHeadlightEnabled"></label>
-<label>强制远光灯<input type="checkbox" id="fsdForceHighBeamEnabled"></label>
-<p class="hint">仅在 FSD/AP active 时生效，走 bus=2/MCP2515/物理CANA 的 0x3E9 DAS_bodyControls；复制实时 0x3E9 后只改 headlightRequest / highLowBeamDecision。0x3F5 只做实际灯光反馈诊断。</p>
+<label>远光辅助<input type="checkbox" id="fsdForceHighBeamEnabled"></label>
+<label>关闭自动大灯<input type="checkbox" id="fsdSuppressAutoHeadlightEnabled"></label>
+<p class="hint">仅在 FSD/AP active 时生效，走 bus=2/MCP2515/物理CANA 的 0x3E9 DAS_bodyControls；远光辅助会同时请求前大灯 ON，并在 0x3E9 offReason 显示前方目标时停止强制远光。关闭自动大灯会请求 headlight OFF / high beam UNDECIDED，让手动拨杆保留决定权，优先级高于开启大灯和远光辅助。实际灯光反馈优先看 0x3F6，0x3F5 只做旧布局兜底。</p>
 </div>
 
 <div class="card">
 <h2>免打扰</h2>
 <label>持续滚轮免打扰<input type="checkbox" id="dndEnabled"></label>
 <label>Nag-Killer联动滚轮免打扰<input type="checkbox" id="nagKillerDndEnabled"></label>
-<p class="hint">持续滚轮：FSD/AP 激活后随机 1-5 秒自动音量加减恢复。Nag-Killer联动：识别 0x399 hands-on state 2..5 后触发 1 次；回到 0/1 会停止待触发动作，需稳定离开约2秒后才允许再次触发。两者都复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 50ms，默认关闭。</p>
+<p class="hint">持续滚轮：FSD/AP 激活后随机 1-5 秒自动音量加减恢复。Nag-Killer联动：识别 0x399 hands-on state 2..6 或 9..10 后触发 2 轮；回到 0/1 会停止待触发动作，需稳定离开约2秒后才允许再次触发。两者都复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 100ms，默认关闭。</p>
 </div>
 
 <div class="card">
@@ -104,7 +105,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <h3>Mode C 扭矩 Nm</h3>
 <label>负端<span class="signed"><b>-</b><input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
 <label>正端<span class="signed"><b>+</b><input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。Nag-Killer联动滚轮开关打开后，识别到 0x399 hands-on state 2..5 会触发 1 次音量滚轮免打扰，回到 0/1 会停止待触发动作，稳定离开约2秒后才会重新触发。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
+<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。Nag-Killer联动滚轮开关打开后，识别到 0x399 hands-on state 2..6 或 9..10 会触发 2 轮音量滚轮免打扰，回到 0/1 会停止待触发动作，稳定离开约2秒后才会重新触发。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
 </div>
 
 <div class="card">
@@ -156,8 +157,9 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 
 <div class="card">
 <h2>开发板诊断</h2>
-<p class="hint">CPU%已扣除TWAI等待时间；loop最大耗时超过5ms、TX最大耗时超过2ms、TWAI missed/overrun新增、MCP2515 overflow新增，说明实时性需要重点看。</p>
+<p class="hint">CPU0主要跑Web/DNS；CAN主循环主要跑CPU1。CPU0/CPU1占用为按空闲循环校准的轻量估算；loop CPU%已扣除TWAI等待时间；loop最大耗时超过5ms、TX最大耗时超过2ms、TWAI missed/overrun新增、MCP2515 overflow新增，说明实时性需要重点看。</p>
 <div class="kv"><span>窗口ms / CPU MHz</span><span><b id="diagWindowMs">-</b> / <b id="cpuMhz">-</b></span></div>
+<div class="kv"><span>CPU0 / CPU1 占用估算</span><span><b id="cpu0Pct">-</b> / <b id="cpu1Pct">-</b></span></div>
 <div class="kv"><span>loop Hz / CPU%</span><span><b id="loopHz">-</b> / <b id="cpuPct">-</b></span></div>
 <div class="kv"><span>loop平均/最大 us</span><span><b id="loopAvgUs">-</b> / <b id="loopMaxUs">-</b></span></div>
 <div class="kv"><span>loop等待平均 / 周期最大 us</span><span><b id="loopWaitAvgUs">-</b> / <b id="loopPeriodMaxUs">-</b></span></div>
@@ -207,10 +209,16 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>灯光条件 开关/CANB/0x399/AP/0x3E9</span><span><b id="fsdLightForceSwitchOn">-</b> / <b id="fsdLightForceCanbOk">-</b> / <b id="fsdLightForce399Fresh">-</b> / <b id="fsdLightForceApActive">-</b> / <b id="fsdLightForce3e9Fresh">-</b></span></div>
 <div class="kv"><span>0x399距今 / AP state</span><span><b id="fsdLightForce399AgeMs">-</b> / <b id="fsdLightForceApState">-</b></span></div>
 <div class="kv"><span>0x3E9收到/新鲜/DLC/有效</span><span><b id="fsdLightForce3e9Seen">-</b> / <b id="fsdLightForce3e9Fresh">-</b> / <b id="fsdLightForce3e9Dlc">-</b> / <b id="fsdLightForce3e9DlcOk">-</b></span></div>
-<div class="kv"><span>0x3E9距今 / 大灯 / 远光 / counter</span><span><b id="fsdLightForceBodyAgeMs">-</b> / <b id="fsdLightForceHeadlightRequest">-</b> / <b id="fsdLightForceHighBeamDecision">-</b> / <b id="fsdLightForceBodyCounter">-</b></span></div>
+<div class="kv"><span>0x3E9距今 / 大灯 / 远光 / offReason / counter</span><span><b id="fsdLightForceBodyAgeMs">-</b> / <b id="fsdLightForceHeadlightRequest">-</b> / <b id="fsdLightForceHighBeamDecision">-</b> / <b id="fsdLightForceHighBeamOffReason">-</b> / <b id="fsdLightForceBodyCounter">-</b></span></div>
+<div class="kv"><span>手动远光 0x249 / 距今 / 状态</span><span><b id="fsdLightStalkSeen">-</b> / <b id="fsdLightStalkAgeMs">-</b> / <b id="fsdLightStalkStatus">-</b></span></div>
+<div class="kv"><span>自动大灯 请求/实际近光/日行灯</span><span><b id="fsdLightForceHeadlightRequestOn">-</b> / <b id="fsdLightActualHeadlightOn">-</b> / <b id="fsdLightActualDrlOn">-</b></span></div>
+<div class="kv"><span>远光请求/实际远光/开关反馈</span><span><b id="fsdLightForceHighBeamRequestOn">-</b> / <b id="fsdLightActualHighBeamOn">-</b> / <b id="fsdLightHighBeamSwitchActive">-</b></span></div>
+<div class="kv"><span>远光拒绝 视觉/雷达/环境/大灯/SNA</span><span><b id="fsdLightHighBeamRejectVision">-</b> / <b id="fsdLightHighBeamRejectRadar">-</b> / <b id="fsdLightHighBeamRejectAmbient">-</b> / <b id="fsdLightHighBeamRejectHeadlight">-</b> / <b id="fsdLightHighBeamRejectSna">-</b></span></div>
 <div class="kv"><span>0x3F5反馈/距今</span><span><b id="fsdLightForce3f5Seen">-</b> / <b id="fsdLightFeedbackAgeMs">-</b></span></div>
+<div class="kv"><span>0x3F6反馈/距今</span><span><b id="fsdLightForce3f6Seen">-</b> / <b id="fsdLightStatusAgeMs">-</b></span></div>
 <div class="kv"><span>近光 左/右</span><span><b id="fsdLightLowBeamLeftStatus">-</b> / <b id="fsdLightLowBeamRightStatus">-</b></span></div>
 <div class="kv"><span>远光 左/右</span><span><b id="fsdLightHighBeamLeftStatus">-</b> / <b id="fsdLightHighBeamRightStatus">-</b></span></div>
+<div class="kv"><span>日行灯 左/右 / 近光作DRL</span><span><b id="fsdLightDrlLeftStatus">-</b> / <b id="fsdLightDrlRightStatus">-</b> / <b id="fsdLightLowBeamsOnForDrl">-</b></span></div>
 <h3>电池预热</h3>
 <div class="kv"><span>电池预热发送中</span><span id="batteryPreheatActive">-</span></div>
 <div class="kv"><span>强制测试模式</span><span id="batteryPreheatForceTestActive">-</span></div>
@@ -247,7 +255,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>AP / hands-on / 目标Ho</span><span><b id="nagKillerApState">-</b> / <b id="nagKillerHandsOnState">-</b> / <b id="nagKillerTargetHandsOn">-</b></span></div>
 <div class="kv"><span>实车扭矩 / 注入扭矩</span><span><b id="nagKillerRealTorqueCx100">-</b> / <b id="nagKillerLastTorqueCx100">-</b></span></div>
 <div class="kv"><span>方向盘角度 / AP年龄 / 转角年龄</span><span><b id="nagKillerSteeringDegCx10">-</b> / <b id="nagKillerApAgeMs">-</b> / <b id="nagKillerSteeringAgeMs">-</b></span></div>
-<div class="kv"><span>NAG滚轮剩余动作 / 触发次数 / 距今ms</span><span><b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b> / <b id="nagKillerDndLastTriggerAgeMs">-</b></span></div>
+<div class="kv"><span>NAG联动滚轮 设定/剩余/累计/距今ms</span><span><b id="nagKillerDndActionCount">-</b> / <b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b> / <b id="nagKillerDndLastTriggerAgeMs">-</b></span></div>
 </div>
 
 <div class="card">
@@ -280,14 +288,15 @@ function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")re
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","cabinCameraTelemetryDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","fsdForceHeadlightEnabled","fsdForceHighBeamEnabled","batteryPreheatEnabled","batteryPreheatForceTestEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
-const stats=["diagWindowMs","cpuMhz","loopHz","cpuPct","loopBusyPct","loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","totalHeapBytes","freeHeapBytes","minFreeHeapBytes","freeHeapPct","minFreeHeapPct","can1Rx","can1Tx","can1TxFail","can1RxRate","can1TxRate","can1TxFailRate","can1RxGapMaxUs","can1TxMaxUs","can1TxSlowCount","twaiState","twaiBusOffCount","twaiRxQueue","twaiTxQueue","twaiRxQueueMax","twaiTxQueueMax","twaiRxMissed","twaiRxOverrun","twaiBusError","twaiTxFailed","twaiTxErr","twaiRxErr","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbRxRate","canbTxRate","canbTxFailRate","canbRxGapMaxUs","canbTxMaxUs","canbTxSlowCount","canbDrainMaxUs","canbDrainMaxFrames","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","fsdLightForceActive","fsdLightForceBlocked","fsdLightForceTxCount","fsdLightForceTxFail","fsdLightForceLastTxAgeMs","fsdLightForceBodyAgeMs","fsdLightForceHeadlightRequest","fsdLightForceHighBeamDecision","fsdLightForceBodyCounter","fsdLightFeedbackAgeMs","fsdLightLowBeamLeftStatus","fsdLightHighBeamLeftStatus","batteryPreheatActive","batteryPreheatTxCount","batteryPreheatAgeMs","batteryPreheatRunMs","batteryPreheatStableTempMs","batteryPreheatAutoOffReason","batteryPreheatAutoOffLatched","batteryPreheatChargeDetected","batteryPreheatSocPct","batteryPreheatSocAgeMs","batteryPreheatFeedbackSeen","batteryPreheatFeedbackBus","batteryPreheatFeedbackAgeMs","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatFeedbackPayload","dndHandsOnState","dndWarningActive","dndActionActive","dndActionType","dndBlocked","dndTxCount","dndLastTriggerAgeMs","dndScrollCacheAgeMs","nagKillerMode","nagKillerActive","nagKillerBlocked","nagKillerBurstActive","nagKillerTargetId","nagKillerRxCount","nagKillerTxCount","nagKillerTxFail","nagKillerLastRxAgeMs","nagKillerLastTxAgeMs","nagKillerApAgeMs","nagKillerSteeringAgeMs","nagKillerApState","nagKillerHandsOnState","nagKillerTargetHandsOn","nagKillerSetHandsOn","nagKillerRealTorqueCx100","nagKillerLastTorqueCx100","nagKillerSteeringDegCx10","nagKillerDndRemaining","nagKillerDndTriggerCount","nagKillerDndLastTriggerAgeMs","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","bmsTempDecodedSeen","bmsTempDecodedMux","bmsTempDecodedCount","bmsTempDecodedAgeMs","bmsTempLatest1Cx100","bmsTempLatest2Cx100","bmsTempLatest3Cx100","bmsTempMinCx100","bmsTempAvgCx100","bmsTempMaxCx100","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339AgeMs","lockSleepCabinEmpty","lockSleep339StableAgeMs","lockSleepBlocked","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","cabinCameraTelemetryDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","fsdForceHeadlightEnabled","fsdForceHighBeamEnabled","fsdSuppressAutoHeadlightEnabled","batteryPreheatEnabled","batteryPreheatForceTestEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","lockDeepSleepEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
+const stats=["diagWindowMs","cpuMhz","loopHz","cpuPct","cpu0Pct","cpu1Pct","loopBusyPct","loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","totalHeapBytes","freeHeapBytes","minFreeHeapBytes","freeHeapPct","minFreeHeapPct","can1Rx","can1Tx","can1TxFail","can1RxRate","can1TxRate","can1TxFailRate","can1RxGapMaxUs","can1TxMaxUs","can1TxSlowCount","twaiState","twaiBusOffCount","twaiRxQueue","twaiTxQueue","twaiRxQueueMax","twaiTxQueueMax","twaiRxMissed","twaiRxOverrun","twaiBusError","twaiTxFailed","twaiTxErr","twaiRxErr","fusedLimitKph","targetSpeedKph","offsetKph","offsetRaw","canbReady","canbHardwareFilterMode","canbRx","canbTx","canbTxFail","canbRxRate","canbTxRate","canbTxFailRate","canbRxGapMaxUs","canbTxMaxUs","canbTxSlowCount","canbDrainMaxUs","canbDrainMaxFrames","canbLastId","canbErrorFlags","canbRxOverflowCount","highBeamStrobeActive","highBeamStrobeRemaining","rearFogBrakeStrobeActive","rearFogBrakeStrobeRemaining","reverseStrobeActive","reverseStrobeRemaining","fsdLightForceActive","fsdLightForceBlocked","fsdLightForceTxCount","fsdLightForceTxFail","fsdLightForceLastTxAgeMs","fsdLightForceBodyAgeMs","fsdLightForceHeadlightRequest","fsdLightForceHighBeamDecision","fsdLightForceHighBeamOffReason","fsdLightForceBodyCounter","fsdLightForceHeadlightRequestOn","fsdLightForceHighBeamRequestOn","fsdLightFeedbackAgeMs","fsdLightStatusAgeMs","fsdLightStalkSeen","fsdLightStalkAgeMs","fsdLightStalkStatus","fsdLightForce3f5Seen","fsdLightForce3f6Seen","fsdLightLowBeamLeftStatus","fsdLightLowBeamRightStatus","fsdLightHighBeamLeftStatus","fsdLightHighBeamRightStatus","fsdLightDrlLeftStatus","fsdLightDrlRightStatus","fsdLightLowBeamsOnForDrl","fsdLightHighBeamSwitchActive","fsdLightActualHeadlightOn","fsdLightActualHighBeamOn","fsdLightActualDrlOn","fsdLightHighBeamRejectVision","fsdLightHighBeamRejectRadar","fsdLightHighBeamRejectAmbient","fsdLightHighBeamRejectHeadlight","fsdLightHighBeamRejectSna","batteryPreheatActive","batteryPreheatTxCount","batteryPreheatAgeMs","batteryPreheatRunMs","batteryPreheatStableTempMs","batteryPreheatAutoOffReason","batteryPreheatAutoOffLatched","batteryPreheatChargeDetected","batteryPreheatSocPct","batteryPreheatSocAgeMs","batteryPreheatFeedbackSeen","batteryPreheatFeedbackBus","batteryPreheatFeedbackAgeMs","batteryPreheatUiTripActive","batteryPreheatUiNavToSupercharger","batteryPreheatUiFastChargerType","batteryPreheatUiState","batteryPreheatUiRequestHeat","batteryPreheatUiPowerW","batteryPreheatUiTargetCx100","batteryPreheatUiAmbientCx100","batteryPreheatUiChargeTargetCx10","batteryPreheatUiEnergyAtDestination","batteryPreheatFeedbackPayload","dndHandsOnState","dndWarningActive","dndActionActive","dndActionType","dndBlocked","dndTxCount","dndLastTriggerAgeMs","dndScrollCacheAgeMs","nagKillerMode","nagKillerActive","nagKillerBlocked","nagKillerBurstActive","nagKillerTargetId","nagKillerRxCount","nagKillerTxCount","nagKillerTxFail","nagKillerLastRxAgeMs","nagKillerLastTxAgeMs","nagKillerApAgeMs","nagKillerSteeringAgeMs","nagKillerApState","nagKillerHandsOnState","nagKillerTargetHandsOn","nagKillerSetHandsOn","nagKillerRealTorqueCx100","nagKillerLastTorqueCx100","nagKillerSteeringDegCx10","nagKillerDndActionCount","nagKillerDndRemaining","nagKillerDndTriggerCount","nagKillerDndLastTriggerAgeMs","bmsTempFrameSeen","bmsTempFrameId","bmsTempFrameBus","bmsTempFrameMux","bmsTempFrameAgeMs","bmsTempFramePayload","bmsTempDecodedSeen","bmsTempDecodedMux","bmsTempDecodedCount","bmsTempDecodedAgeMs","bmsTempLatest1Cx100","bmsTempLatest2Cx100","bmsTempLatest3Cx100","bmsTempMinCx100","bmsTempAvgCx100","bmsTempMaxCx100","lockSleepArmed","lockSleepTriggered","lockSleepLastId","lockSleepSource","lockSleepAgeMs","lockSleep339Seen","lockSleep339SimpleStatus","lockSleep339AgeMs","lockSleepCabinEmpty","lockSleep339StableAgeMs","lockSleepBlocked","currentGear","dasAutopilotState","brakeActive","vehicleSpeedKph","rightScrollTicks","rightStalkStatus","rightStalkCounter","scrollGearIntent","scrollGearInjectActive","scrollGearInjectTarget","scrollGearInjectOk","scrollGearInjectBlocked","uptime"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 stats.push("batteryPreheatBlockMask","batteryPreheatChargeStatusSeen","batteryPreheatChargeStatusBus","batteryPreheatChargeStatus","batteryPreheatChargeStatusAgeMs","batteryPreheatSocSeen","batteryPreheatSocBus","batteryPreheatSocUiDeciPct","batteryPreheatBms332Seen","batteryPreheatBms332Bus","batteryPreheatBms332Mux","batteryPreheatBms332AgeMs","batteryPreheatBms332MinCx100","batteryPreheatBms332AvgCx100","batteryPreheatBms332MaxCx100","batteryPreheatBms332Payload","batteryPreheatVcfrontSeen","batteryPreheatVcfrontBus","batteryPreheatVcfrontAgeMs","batteryPreheatVcfrontCoolantLevel","batteryPreheatVcfrontCoolantBatInletCx100","batteryPreheatVcfrontCoolantPtInletCx100","batteryPreheatVcfrontAmbientCx100","batteryPreheatVcfrontAmbientFilteredCx100","batteryPreheatVcfrontPayload");
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else e.value=v;}
 function getVal(e){return e.type==="checkbox"?(e.checked?1:0):e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
 function yesNo(v){return v?"是":"否"}
+function yesNoUnknown(v){return v===255?"-":yesNo(v)}
 function preheatBlock(v){const a=[];if(v&1)a.push("开关关闭");if(v&2)a.push("CANB关闭");if(v&4)a.push("MCP2515未就绪");if(v&8)a.push("休眠禁止发送");if(v&16)a.push("SOC低于5%");if(v&32)a.push("检测到充电");if(v&64)a.push("最高温>=45°C");if(v&128)a.push("平均温>=42°C稳定10秒");if(v&256)a.push("运行超过15分钟");return a.length?a.join("；"):"无阻止"}
 function cx100(v){return v<=-32000?"-":(v/100).toFixed(2)+" ℃"}
 function durMs(v){v=Number(v)||0;if(v<1000)return v+" ms";if(v<60000)return (v/1000).toFixed(1)+" 秒";return (v/60000).toFixed(1)+" 分钟"}
@@ -299,18 +308,23 @@ function setDiagPage(on){const main=document.getElementById("mainPage"),diag=doc
 function fmtStat(k,v){
 if(k==="diagWindowMs")return v+" ms";
 if(k==="cpuMhz")return v+" MHz";
-if(["cpuPct","loopBusyPct","freeHeapPct","minFreeHeapPct"].includes(k))return v+"%";
+if(["cpuPct","cpu0Pct","cpu1Pct","loopBusyPct","freeHeapPct","minFreeHeapPct"].includes(k))return v+"%";
 if(["loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","can1RxGapMaxUs","can1TxMaxUs","canbRxGapMaxUs","canbTxMaxUs","canbDrainMaxUs"].includes(k))return us(v);
 if(["totalHeapBytes","freeHeapBytes","minFreeHeapBytes"].includes(k))return kb(v);
 if(["can1RxRate","can1TxRate","can1TxFailRate","canbRxRate","canbTxRate","canbTxFailRate"].includes(k))return v+"/s";
 if(k==="canbLastId"||k==="canbErrorFlags"||k==="bmsTempFrameId"||k==="lockSleepLastId"||k==="nagKillerTargetId")return "0x"+(v>>>0).toString(16).toUpperCase();
 if(k==="fsdLightForceActive")return yesNo(v);
-if(k==="fsdLightForceBlocked")return ["ok","disabled","canb","stale_0x399","ap_state","no_0x3E9","stale_0x3E9","tx_fail","bad_dlc"][v]||v;
-if(["fsdLightForceSwitchOn","fsdLightForceCanbOk","fsdLightForce399Fresh","fsdLightForceApActive","fsdLightForce3e9Seen","fsdLightForce3e9Fresh","fsdLightForce3e9DlcOk","fsdLightForce3f5Seen"].includes(k))return yesNo(v);
-if(["fsdLightForceLastTxAgeMs","fsdLightForceBodyAgeMs","fsdLightForce399AgeMs","fsdLightFeedbackAgeMs"].includes(k))return ageMs(v);
+if(k==="fsdLightForceBlocked")return ["ok","disabled","canb","stale_0x399","ap_state","no_0x3E9","stale_0x3E9","tx_fail","bad_dlc","front_target"][v]||v;
+if(["fsdLightForceSwitchOn","fsdLightForceCanbOk","fsdLightForce399Fresh","fsdLightForceApActive","fsdLightForce3e9Seen","fsdLightForce3e9Fresh","fsdLightForce3e9DlcOk","fsdLightForce3f5Seen","fsdLightForce3f6Seen","fsdLightStalkSeen"].includes(k))return yesNo(v);
+if(["fsdLightForceHeadlightRequestOn","fsdLightForceHighBeamRequestOn","fsdLightActualHeadlightOn","fsdLightActualHighBeamOn","fsdLightActualDrlOn","fsdLightLowBeamsOnForDrl","fsdLightHighBeamSwitchActive","fsdLightHighBeamRejectVision","fsdLightHighBeamRejectRadar","fsdLightHighBeamRejectAmbient","fsdLightHighBeamRejectHeadlight","fsdLightHighBeamRejectSna"].includes(k))return yesNoUnknown(v);
+if(["fsdLightForceLastTxAgeMs","fsdLightForceBodyAgeMs","fsdLightForce399AgeMs","fsdLightFeedbackAgeMs","fsdLightStatusAgeMs","fsdLightStalkAgeMs"].includes(k))return ageMs(v);
 if(k==="fsdLightForceApState")return ["DISABLED","UNAVAILABLE","AVAILABLE","ACTIVE_NOMINAL","ACTIVE_RESTRICTED","ACTIVE_NAV","ACTIVE_FSD"][v]||v;
-if(["fsdLightForceHeadlightRequest","fsdLightForceHighBeamDecision","fsdLightForceBodyCounter"].includes(k))return v===255?"-":v;
-if(k==="fsdLightLowBeamLeftStatus"||k==="fsdLightLowBeamRightStatus"||k==="fsdLightHighBeamLeftStatus"||k==="fsdLightHighBeamRightStatus")return v===255?"-":(["OFF","ON","FAULT","SNA"][v]||v);
+if(k==="fsdLightForceHeadlightRequest")return v===255?"-":(["OFF","ON","TAIL_ONLY","INVALID"][v]||v);
+if(k==="fsdLightForceHighBeamDecision")return v===255?"-":(["UNDECIDED","OFF","ON","SNA"][v]||v);
+if(k==="fsdLightForceBodyCounter")return v===255?"-":v;
+if(k==="fsdLightForceHighBeamOffReason")return v===255?"-":(["允许远光","视觉目标","雷达目标","环境光","大灯条件","SNA"][v]||v);
+if(k==="fsdLightStalkStatus")return v===255?"-":(["IDLE","PULL闪灯","PUSH远光","SNA"][v]||v);
+if(k==="fsdLightLowBeamLeftStatus"||k==="fsdLightLowBeamRightStatus"||k==="fsdLightHighBeamLeftStatus"||k==="fsdLightHighBeamRightStatus"||k==="fsdLightDrlLeftStatus"||k==="fsdLightDrlRightStatus")return v===255?"-":(["OFF","ON","FAULT","SNA"][v]||v);
 if(k==="batteryPreheatActive"||k==="batteryPreheatForceTestActive"||k==="batteryPreheatAutoOffLatched"||k==="batteryPreheatChargeDetected"||k==="batteryPreheatChargeStatusSeen"||k==="batteryPreheatSocSeen"||k==="batteryPreheatFeedbackSeen"||k==="batteryPreheatBms332Seen"||k==="batteryPreheatVcfrontSeen"||k==="bmsTempFrameSeen"||k==="bmsTempDecodedSeen")return yesNo(v);
 if(k==="batteryPreheatBlockMask")return preheatBlock(v);
 if(k==="batteryPreheatRunMs"||k==="batteryPreheatStableTempMs")return durMs(v);
@@ -342,7 +356,7 @@ if(k==="nagKillerSetHandsOn")return v?("L"+v):"否";
 if(k==="nagKillerActive"||k==="nagKillerBurstActive")return yesNo(v);
 if(k==="nagKillerRealTorqueCx100"||k==="nagKillerLastTorqueCx100")return v<=-32000?"-":(v/100).toFixed(2)+" Nm";
 if(k==="nagKillerSteeringDegCx10")return v<=-32000?"-":(v/10).toFixed(1)+"°";
-if(k==="nagKillerDndLastTriggerAgeMs")return v+" ms";
+if(k==="nagKillerDndLastTriggerAgeMs"||k==="dndLastTriggerAgeMs"||k==="dndScrollCacheAgeMs")return ageMs(v);
 if(k==="dasAutopilotState")return ["DISABLED","UNAVAILABLE","AVAILABLE","ACTIVE_NOMINAL","ACTIVE_RESTRICTED","ACTIVE_NAV","ACTIVE_FSD"][v]||v;
 if(k==="scrollGearInjectBlocked")return ["ok","bad_target","brake","speed","same_gear","cooldown","ap_state"][v]||v;
 return v}
@@ -356,10 +370,16 @@ else if(val("loopMaxUs")>5000)add(1,"主循环最大耗时超过5ms");
 if(val("loopPeriodMaxUs")>20000)add(2,"主循环周期出现20ms以上间隔");
 else if(val("loopPeriodMaxUs")>10000)add(1,"主循环周期出现10ms以上间隔");
 const cpuPct=val("cpuPct")||val("loopBusyPct");
+const cpu0Pct=val("cpu0Pct");
+const cpu1Pct=val("cpu1Pct");
 const freeHeapPct=val("freeHeapPct");
 const freeHeapBytes=val("freeHeapBytes");
 if(cpuPct>90)add(2,"CPU占用超过90%");
 else if(cpuPct>70)add(1,"CPU占用超过70%");
+if(cpu0Pct>90)add(2,"CPU0占用超过90%");
+else if(cpu0Pct>70)add(1,"CPU0占用超过70%");
+if(cpu1Pct>90)add(2,"CPU1占用超过90%");
+else if(cpu1Pct>70)add(1,"CPU1占用超过70%");
 if((freeHeapPct>0&&freeHeapPct<5)||(freeHeapBytes>0&&freeHeapBytes<40000))add(2,"可用内存低于5%或40KB");
 else if((freeHeapPct>0&&freeHeapPct<10)||(freeHeapBytes>0&&freeHeapBytes<80000))add(1,"可用内存低于10%或80KB");
 if(val("webTaskMaxUs")>50000)add(1,"WebUI单次处理超过50ms");
@@ -407,7 +427,8 @@ function saveConfig(){fetch("/config",{method:"POST",body:body()}).then(()=>fetc
 function rebootBoard(){setPolling(false);const p=document.getElementById("poll");if(p)p.checked=false;showResult("正在重启...");fetch("/reboot",{method:"POST"}).catch(()=>{})}
 function recQuery(){const ids=document.getElementById("recIds").value.trim();return ids?("?ids="+encodeURIComponent(ids)):""}
 function stopReason(v){return v===1?"满":(v===2?"超时":"手动/无")}
-function setRecUi(j){const active=j&&j.active;document.getElementById("recState").textContent=active?"抓包中":(j&&j.saved?"已保存":"空闲");document.getElementById("recCount").textContent=j?(j.count+" / "+j.cap):"-";document.getElementById("recBus1").textContent=j?j.bus1:"-";document.getElementById("recBus2").textContent=j?j.bus2:"-";document.getElementById("recDrop").textContent=j?(j.dropped+" / "+stopReason(j.stopReason)):"-";document.getElementById("recPsram").textContent=j?((j.psram?"可用":"不可用")+" / "+Math.round((j.bytes||0)/1024)+" KB"):"-";document.getElementById("recDownload").style.display=(!active&&j&&j.saved)?"inline-block":"none"}
+function recMemText(j){if(!j)return "-";const mem=Number(j.mem||0);const src=mem===1?"PSRAM":(mem===2?"内部RAM":"未分配");const ps=j.psramReady?"PSRAM已识别":"PSRAM未识别";return src+" / "+ps+" / "+Math.round((j.bytes||0)/1024)+" KB"}
+function setRecUi(j){const active=j&&j.active;document.getElementById("recState").textContent=active?"抓包中":(j&&j.saved?"已保存":"空闲");document.getElementById("recCount").textContent=j?(j.count+" / "+j.cap):"-";document.getElementById("recBus1").textContent=j?j.bus1:"-";document.getElementById("recBus2").textContent=j?j.bus2:"-";document.getElementById("recDrop").textContent=j?(j.dropped+" / "+stopReason(j.stopReason)):"-";document.getElementById("recPsram").textContent=recMemText(j);document.getElementById("recDownload").style.display=(!active&&j&&j.saved)?"inline-block":"none"}
 function pollRec(){fetch("/rec_status").then(r=>r.json()).then(setRecUi).catch(()=>{})}
 function startRec(){fetch("/rec_start"+recQuery(),{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(!recTimer)recTimer=setInterval(pollRec,800)})}
 function stopRec(){fetch("/rec_stop",{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(recTimer){clearInterval(recTimer);recTimer=null}})}
