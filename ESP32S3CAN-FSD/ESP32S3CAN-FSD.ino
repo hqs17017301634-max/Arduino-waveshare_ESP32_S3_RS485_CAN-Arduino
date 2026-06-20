@@ -189,6 +189,7 @@ struct RuntimeConfig {
   bool canbServiceModeEnabled = false;
   uint8_t canbFilterMode = CANB_FILTER_ALL; // 0=capture/debug all, 1=current feature IDs
   bool highBeamStrobeEnabled = false; // arms double-pull flash-to-pass trigger
+  bool fsdForceOvertakeLightEnabled = false; // AP/FSD-active 0x249 flash-to-pass PULL
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool fsdForceHeadlightEnabled = false; // AP/FSD-active 0x3E9 headlightRequest=ON
@@ -2202,6 +2203,8 @@ constexpr uint8_t REAR_FOG_PRIORITY_BODY = 2;
 constexpr uint8_t REAR_FOG_PRIORITY_REVERSE = 3;
 constexpr uint16_t HIGH_BEAM_STROBE_INTERVAL_MS = 75;
 constexpr uint16_t HIGH_BEAM_STROBE_RESEND_MS = 45;
+constexpr uint16_t FSD_OVERTAKE_LIGHT_TRIGGER_HOLD_MS = 3000;
+constexpr uint16_t FSD_OVERTAKE_LIGHT_FORCE_PERIOD_MS = 100;
 constexpr uint16_t REAR_FOG_STROBE_INTERVAL_MS = 135;
 // Hazard (0x3C2 bit3) is a momentary TOGGLE button: one click toggles hazards
 // on/off. Reverse = one click ON -> hold REVERSE_HAZARD_ON_MS (car flashes
@@ -2313,6 +2316,11 @@ static volatile bool highBeamStrobeOutputOn = false;
 static volatile uint8_t highBeamStrobePulsesRemaining = 0;
 static volatile uint32_t highBeamStrobeLastToggleMs = 0;
 static volatile uint32_t highBeamStrobeLastSendMs = 0;
+static bool fsdOvertakeLightForceLatched = false;
+static bool fsdOvertakeLightLongPullTriggered = false;
+static uint32_t fsdOvertakeLightPullStartMs = 0;
+static volatile bool fsdOvertakeLightForceOutputOn = false;
+static volatile uint32_t fsdOvertakeLightForceLastTxMs = 0;
 static bool highBeamLastPullDown = false;
 static uint8_t highBeamPullCount = 0;
 static uint32_t highBeamLastPullMs = 0;
@@ -2375,6 +2383,7 @@ static void handleCanBFrame(const can_frame& frame);
 static void setCanBServiceMode(bool enabled);
 static void serviceCanBScheduledTx();
 static void serviceHighBeamStrobe(const RuntimeConfig& cfg);
+static void serviceFsdOvertakeLightForce(const RuntimeConfig& cfg);
 static void serviceReverseStrobe(const RuntimeConfig& cfg);
 static void serviceRearFogBrakeStrobe(const RuntimeConfig& cfg);
 static void serviceFsdLightForce(const RuntimeConfig& cfg);
@@ -3561,6 +3570,54 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
   highBeamStrobeLastSendMs = now;
 }
 
+static void stopFsdOvertakeLightForce(const RuntimeConfig& cfg, bool sendIdle) {
+  if (sendIdle && cfg.canbEnabled && canbReady) {
+    canb_send(highBeamFrame(STALK_STATUS_IDLE));
+  }
+  fsdOvertakeLightForceOutputOn = false;
+  fsdOvertakeLightForceLastTxMs = 0;
+}
+
+static void serviceFsdOvertakeLightForce(const RuntimeConfig& cfg) {
+  const uint32_t now = millis();
+  const bool allowed =
+      cfg.fsdForceOvertakeLightEnabled &&
+      cfg.canbEnabled &&
+      canbReady &&
+      nagKillerApContextFresh(now) &&
+      nagKillerApStateActive(nagKillerApState);
+
+  if (!allowed) {
+    if (fsdOvertakeLightForceOutputOn) stopFsdOvertakeLightForce(cfg, true);
+    fsdOvertakeLightForceLatched = false;
+    fsdOvertakeLightPullStartMs = 0;
+    fsdOvertakeLightLongPullTriggered = false;
+    return;
+  }
+
+  if (!fsdOvertakeLightForceLatched) {
+    if (fsdOvertakeLightForceOutputOn) stopFsdOvertakeLightForce(cfg, true);
+    return;
+  }
+
+  if (highBeamStrobeActive || highBeamStrobeOutputOn) {
+    stopHighBeamStrobe(false);
+    fsdOvertakeLightForceOutputOn = false;
+    fsdOvertakeLightForceLastTxMs = 0;
+  }
+
+  if (fsdOvertakeLightForceOutputOn &&
+      fsdOvertakeLightForceLastTxMs != 0 &&
+      (now - fsdOvertakeLightForceLastTxMs) < FSD_OVERTAKE_LIGHT_FORCE_PERIOD_MS) {
+    return;
+  }
+
+  if (canb_send(highBeamFrame(STALK_STATUS_PULL))) {
+    fsdOvertakeLightForceOutputOn = true;
+    fsdOvertakeLightForceLastTxMs = now;
+  }
+}
+
 static void serviceReverseStrobe(const RuntimeConfig& cfg) {
   if (!canbReady) return;
   if (!cfg.canbEnabled) {
@@ -3851,10 +3908,47 @@ static void handleCanBFrame(const can_frame& frame) {
     const uint8_t stalkStatus = readStalkStatus(frame);
     const bool pullDown = stalkStatus == STALK_STATUS_PULL;
     const uint32_t now = canbLastStwActnRqMs;
+    const bool overtakeLightTriggerAllowed =
+        cfg.fsdForceOvertakeLightEnabled &&
+        cfg.canbEnabled &&
+        canbReady &&
+        nagKillerApContextFresh(now) &&
+        nagKillerApStateActive(nagKillerApState);
+    bool pullEdgeConsumed = false;
+
+    if (!overtakeLightTriggerAllowed) {
+      fsdOvertakeLightPullStartMs = 0;
+      fsdOvertakeLightLongPullTriggered = false;
+    } else if (pullDown) {
+      if (!highBeamLastPullDown) {
+        if (fsdOvertakeLightForceLatched) {
+          fsdOvertakeLightForceLatched = false;
+          stopFsdOvertakeLightForce(cfg, true);
+          fsdOvertakeLightPullStartMs = 0;
+          fsdOvertakeLightLongPullTriggered = true;
+          pullEdgeConsumed = true;
+        } else {
+          fsdOvertakeLightPullStartMs = now;
+          fsdOvertakeLightLongPullTriggered = false;
+          pullEdgeConsumed = true;
+        }
+      } else if (!fsdOvertakeLightForceLatched &&
+                 !fsdOvertakeLightLongPullTriggered &&
+                 fsdOvertakeLightPullStartMs != 0 &&
+                 (now - fsdOvertakeLightPullStartMs) >= FSD_OVERTAKE_LIGHT_TRIGGER_HOLD_MS) {
+        fsdOvertakeLightForceLatched = true;
+        fsdOvertakeLightLongPullTriggered = true;
+        fsdOvertakeLightForceLastTxMs = 0;
+        if (highBeamStrobeActive || highBeamStrobeOutputOn) stopHighBeamStrobe(false);
+      }
+    } else {
+      fsdOvertakeLightPullStartMs = 0;
+      fsdOvertakeLightLongPullTriggered = false;
+    }
 
     if (!cfg.highBeamStrobeEnabled) {
       highBeamPullCount = 0;
-    } else if (pullDown && !highBeamLastPullDown && !highBeamStrobeActive) {
+    } else if (!pullEdgeConsumed && pullDown && !highBeamLastPullDown && !highBeamStrobeActive) {
       if (highBeamLastPullMs == 0 ||
           (now - highBeamLastPullMs) > HIGH_BEAM_DOUBLE_PULL_WINDOW_MS) {
         highBeamPullCount = 0;
@@ -4340,6 +4434,7 @@ static void handleStatus() {
   j += ",\"canbHardwareFilterEnabled\":0";
 #endif
   j += ",\"highBeamStrobeEnabled\":"; j += c.highBeamStrobeEnabled ? 1 : 0;
+  j += ",\"fsdForceOvertakeLightEnabled\":"; j += c.fsdForceOvertakeLightEnabled ? 1 : 0;
   j += ",\"rearFogBrakeStrobeEnabled\":"; j += c.rearFogBrakeStrobeEnabled ? 1 : 0;
   j += ",\"reverseStrobeEnabled\":"; j += c.reverseStrobeEnabled ? 1 : 0;
   j += ",\"fsdForceHeadlightEnabled\":"; j += c.fsdForceHeadlightEnabled ? 1 : 0;
@@ -4657,6 +4752,8 @@ static void handleConfig() {
     c.canbFilterMode = argBool("canbFilterEnabled", c.canbFilterMode != CANB_FILTER_ALL) ? CANB_FILTER_FEATURE : CANB_FILTER_ALL;
   }
   c.highBeamStrobeEnabled   = argBool("highBeamStrobeEnabled", c.highBeamStrobeEnabled);
+  c.fsdForceOvertakeLightEnabled =
+      argBool("fsdForceOvertakeLightEnabled", c.fsdForceOvertakeLightEnabled);
   c.rearFogBrakeStrobeEnabled = argBool("rearFogBrakeStrobeEnabled", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled    = argBool("reverseStrobeEnabled", c.reverseStrobeEnabled);
   c.fsdForceHeadlightEnabled = argBool("fsdForceHeadlightEnabled", c.fsdForceHeadlightEnabled);
@@ -4947,6 +5044,7 @@ static void loadConfigFromPrefs() {
                                   prefs.getBool("canbFilt", false) ? CANB_FILTER_FEATURE : c.canbFilterMode);
   c.canbFilterMode         = normalizeCanBFilterMode(c.canbFilterMode);
   c.highBeamStrobeEnabled  = prefs.getBool("hbStrobe", c.highBeamStrobeEnabled);
+  c.fsdForceOvertakeLightEnabled = prefs.getBool("fsdPassOn", c.fsdForceOvertakeLightEnabled);
   c.rearFogBrakeStrobeEnabled = prefs.getBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled   = prefs.getBool("revStrobe", c.reverseStrobeEnabled);
   c.fsdForceHeadlightEnabled = prefs.getBool("fsdHeadOn", c.fsdForceHeadlightEnabled);
@@ -5003,6 +5101,7 @@ static void saveConfigToPrefs() {
   prefs.putUChar("canbFiltMode", c.canbFilterMode);
   prefs.putBool("canbFilt", c.canbFilterMode != CANB_FILTER_ALL);
   prefs.putBool("hbStrobe", c.highBeamStrobeEnabled);
+  prefs.putBool("fsdPassOn", c.fsdForceOvertakeLightEnabled);
   prefs.putBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   prefs.putBool("revStrobe", c.reverseStrobeEnabled);
   prefs.putBool("fsdHeadOn", c.fsdForceHeadlightEnabled);
@@ -5289,6 +5388,7 @@ void loop() {
     drainCanBWithBudget();
     serviceCanBScheduledTx();
     serviceHighBeamStrobe(canbCfg);
+    serviceFsdOvertakeLightForce(canbCfg);
     serviceReverseStrobe(canbCfg);
     serviceRearFogBrakeStrobe(canbCfg);
     serviceFsdLightForce(canbCfg);
@@ -5298,6 +5398,7 @@ void loop() {
     serviceDndScrollAction(canbCfg);
   } else {
     serviceHighBeamStrobe(canbCfg);
+    serviceFsdOvertakeLightForce(canbCfg);
     serviceReverseStrobe(canbCfg);
     serviceRearFogBrakeStrobe(canbCfg);
     serviceFsdLightForce(canbCfg);
