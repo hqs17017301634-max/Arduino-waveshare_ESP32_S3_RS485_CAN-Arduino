@@ -159,6 +159,11 @@ constexpr uint8_t UI_HANDS_REQ_BLOCK_STALE_FRAME = 3;
 constexpr uint8_t UI_HANDS_REQ_BLOCK_BAD_DLC = 4;
 constexpr uint8_t UI_HANDS_REQ_BLOCK_CAN1_RX_ONLY = 5;
 constexpr uint8_t UI_HANDS_REQ_BLOCK_TX_FAIL = 6;
+constexpr uint8_t DAS_LC_REASON_DECODE_OK = 0;
+constexpr uint8_t DAS_LC_REASON_DECODE_NO_FRAME = 1;
+constexpr uint8_t DAS_LC_REASON_DECODE_BAD_DLC = 2;
+constexpr uint8_t DAS_LC_REASON_DECODE_NO_LAYOUT = 3;
+constexpr uint8_t DAS_LC_REASON_DECODE_INVALID_VALUE = 4;
 constexpr uint16_t UI_HANDS_REQ_FRAME_MAX_AGE_MS = 1000;
 
 // ---- Runtime configuration (WebUI-tunable; defaults match the legacy constants) ----
@@ -298,8 +303,6 @@ struct RuntimeStatus {
   uint32_t freeHeapPct = 0;
   uint32_t minFreeHeapPct = 0;
   uint32_t cpuMhz = 0;
-  uint8_t highBeamStrobeActive = 0;
-  uint8_t highBeamStrobeRemaining = 0;
   uint8_t rearFogBrakeStrobeActive = 0;
   uint8_t rearFogBrakeStrobeRemaining = 0;
   uint8_t reverseStrobeActive = 0;
@@ -322,33 +325,18 @@ struct RuntimeStatus {
   uint8_t fsdLightForce3e9DlcOk = 0;
   uint8_t fsdLightForce3f5Seen = 0;
   uint8_t fsdLightForce3f6Seen = 0;
-  uint8_t fsdLightStalkSeen = 0;
   uint8_t fsdLightForceHeadlightRequest = 255;
-  uint8_t fsdLightForceHighBeamDecision = 255;
-  uint8_t fsdLightForceHighBeamOffReason = 255;
   uint8_t fsdLightForceBodyCounter = 255;
   uint8_t fsdLightForceHeadlightRequestOn = 255;
-  uint8_t fsdLightForceHighBeamRequestOn = 255;
   uint32_t fsdLightFeedbackAgeMs = 0;
   uint32_t fsdLightStatusAgeMs = 0;
-  uint32_t fsdLightStalkAgeMs = 0;
-  uint8_t fsdLightStalkStatus = 255;
   uint8_t fsdLightLowBeamLeftStatus = 255;
   uint8_t fsdLightLowBeamRightStatus = 255;
-  uint8_t fsdLightHighBeamLeftStatus = 255;
-  uint8_t fsdLightHighBeamRightStatus = 255;
   uint8_t fsdLightDrlLeftStatus = 255;
   uint8_t fsdLightDrlRightStatus = 255;
   uint8_t fsdLightLowBeamsOnForDrl = 255;
-  uint8_t fsdLightHighBeamSwitchActive = 255;
   uint8_t fsdLightActualHeadlightOn = 255;
-  uint8_t fsdLightActualHighBeamOn = 255;
   uint8_t fsdLightActualDrlOn = 255;
-  uint8_t fsdLightHighBeamRejectVision = 255;
-  uint8_t fsdLightHighBeamRejectRadar = 255;
-  uint8_t fsdLightHighBeamRejectAmbient = 255;
-  uint8_t fsdLightHighBeamRejectHeadlight = 255;
-  uint8_t fsdLightHighBeamRejectSna = 255;
   uint8_t uiHandsOnReqActive = 0;
   uint8_t uiHandsOnReqBlocked = UI_HANDS_REQ_BLOCK_DISABLED;
   uint8_t uiHandsOnReqSeen = 0;
@@ -441,6 +429,14 @@ struct RuntimeStatus {
   uint8_t nagKillerDndRemaining = 0;
   uint32_t nagKillerDndTriggerCount = 0;
   uint32_t nagKillerDndLastTriggerAgeMs = 0;
+  uint8_t dasLcHandsOnReasonSeen = 0;
+  uint8_t dasLcHandsOnReasonDlc = 0;
+  uint8_t dasLcHandsOnReasonDecode = 1;
+  uint8_t dasLcHandsOnReasonPrevious = 255;
+  uint8_t dasLcHandsOnReasonLatest = 255;
+  uint32_t dasLcHandsOnReasonFrameAgeMs = 0;
+  uint32_t dasLcHandsOnReasonPreviousAgeMs = 0;
+  uint32_t dasLcHandsOnReasonLatestAgeMs = 0;
   uint8_t bmsTempFrameSeen = 0;
   uint32_t bmsTempFrameId = 0;
   uint8_t bmsTempFrameBus = 0;
@@ -697,6 +693,9 @@ static uint32_t uiHandsOnReqLastRxMs = 0;
 static uint32_t uiHandsOnReqLastTxMs = 0;
 static uint32_t uiHandsOnReqTxCount = 0;
 static uint32_t uiHandsOnReqTxFailCount = 0;
+static uint32_t dasCarLogLastRxMs = 0;
+static uint32_t dasLcHandsOnReasonPreviousMs = 0;
+static uint32_t dasLcHandsOnReasonLatestMs = 0;
 static uint32_t nagKillerLastRxMs = 0;
 static uint32_t nagKillerLastTxMs = 0;
 static uint32_t nagKillerLastApMs = 0;
@@ -897,6 +896,7 @@ constexpr uint32_t CAN_ID_BMS_BMB_MIN_MAX = 0x332;
 constexpr uint32_t CAN_ID_BMS_LOG1 = 0x374;
 constexpr uint32_t CAN_ID_BMS_PACK_TEMPERATURES = 0x712;
 constexpr uint32_t CAN_ID_DAS_STATUS = 0x399;
+constexpr uint32_t CAN_ID_DAS_CAR_LOG = 0x5D9;
 constexpr uint32_t CAN_ID_DRIVER_OCCUPANCY = 0x3A1;
 constexpr uint32_t CAN_ID_BRAKE_PEDAL = 0x145;
 constexpr uint32_t CAN_ID_RCM_INERTIAL2_CH = 0x111;
@@ -929,6 +929,7 @@ static inline bool isRelevantCanId(uint32_t canId) {
          canId == CAN_ID_BMS_LOG1 ||
          canId == CAN_ID_BMS_PACK_TEMPERATURES ||
          canId == CAN_ID_DAS_STATUS ||
+         canId == CAN_ID_DAS_CAR_LOG ||
          canId == CAN_ID_DRIVER_OCCUPANCY ||
          canId == CAN_ID_FOLLOW_DISTANCE ||
          canId == CAN_ID_AP_CONTROL;
@@ -1551,6 +1552,50 @@ static void handleNagKillerContextFrame(const can_frame& frame) {
     nagKillerLastSteeringMs = now;
     g_status.nagKillerSteeringDegCx10 = static_cast<int>(nagKillerSteeringAngleDeg * 10.0f);
   }
+}
+
+static bool decodeDasLcHandsOnReason(const can_frame& frame, uint8_t& reason) {
+  (void)frame;
+  (void)reason;
+  // Local Tesla Explorer metadata confirms DAS_LC_handsOnReason is in
+  // 0x5D9 DAS_carLog, but the available DBC/layout files do not include its
+  // bit-level start/length. Keep the decoder disabled until that layout is
+  // confirmed by DBC or a known-good capture.
+  return false;
+}
+
+static void handleDasCarLogFrame(const can_frame& frame) {
+  if (frame.can_id != CAN_ID_DAS_CAR_LOG) return;
+
+  const uint32_t now = millis();
+  dasCarLogLastRxMs = now;
+  g_status.dasLcHandsOnReasonSeen = 1;
+  g_status.dasLcHandsOnReasonDlc = frame.can_dlc;
+
+  if (frame.can_dlc < 1) {
+    g_status.dasLcHandsOnReasonDecode = DAS_LC_REASON_DECODE_BAD_DLC;
+    return;
+  }
+
+  uint8_t reason = 255;
+  if (!decodeDasLcHandsOnReason(frame, reason)) {
+    g_status.dasLcHandsOnReasonDecode = DAS_LC_REASON_DECODE_NO_LAYOUT;
+    return;
+  }
+  if (reason > 53) {
+    g_status.dasLcHandsOnReasonDecode = DAS_LC_REASON_DECODE_INVALID_VALUE;
+    return;
+  }
+
+  g_status.dasLcHandsOnReasonDecode = DAS_LC_REASON_DECODE_OK;
+  if (g_status.dasLcHandsOnReasonLatest != reason) {
+    if (g_status.dasLcHandsOnReasonLatest != 255) {
+      g_status.dasLcHandsOnReasonPrevious = g_status.dasLcHandsOnReasonLatest;
+      dasLcHandsOnReasonPreviousMs = dasLcHandsOnReasonLatestMs;
+    }
+    g_status.dasLcHandsOnReasonLatest = reason;
+  }
+  dasLcHandsOnReasonLatestMs = now;
 }
 
 static bool decideNagKillerDocTorque(uint32_t now, float& torqueNm, uint8_t& handsLevel) {
@@ -2869,8 +2914,6 @@ static void stopHighBeamStrobe(bool sendIdle) {
   highBeamStrobePulsesRemaining = 0;
   highBeamStrobeLastToggleMs = 0;
   highBeamStrobeLastSendMs = 0;
-  g_status.highBeamStrobeActive = 0;
-  g_status.highBeamStrobeRemaining = 0;
 }
 
 static void startHighBeamStrobe(bool manualTrigger = false) {
@@ -2880,8 +2923,6 @@ static void startHighBeamStrobe(bool manualTrigger = false) {
   highBeamStrobePulsesRemaining = HIGH_BEAM_STROBE_PULSES;
   highBeamStrobeLastToggleMs = 0;
   highBeamStrobeLastSendMs = 0;
-  g_status.highBeamStrobeActive = 1;
-  g_status.highBeamStrobeRemaining = HIGH_BEAM_STROBE_PULSES;
 }
 
 static void stopRearFogBrakeStrobe(bool sendOff) {
@@ -3022,7 +3063,6 @@ static void serviceFsdLightForce(const RuntimeConfig& cfg) {
       g_status.fsdLightForceBlocked = FSD_LIGHT_BLOCK_DLC;
       return;
     }
-    g_status.fsdLightForceHighBeamOffReason = static_cast<uint8_t>(offReason);
     if (offReason == 1 || offReason == 2) {
       protectedBlock = FSD_LIGHT_BLOCK_OFF_REASON_TARGET;
       forceHighBeam = false;
@@ -3083,9 +3123,6 @@ static void serviceFsdLightForce(const RuntimeConfig& cfg) {
     g_status.fsdLightForceBlocked = protectedBlock;
     g_status.fsdLightForceTxCount = fsdLightForceTxCount;
     g_status.fsdLightForceHeadlightRequest = headlightRequest;
-    g_status.fsdLightForceHighBeamDecision =
-        forceHighBeam ? 2 : static_cast<uint8_t>((f.data[1] >> 2) & 0x03);
-    if (forceHighBeam) g_status.fsdLightForceHighBeamOffReason = 0;
     g_status.fsdLightForceBodyCounter = counter;
   } else {
     fsdLightForceTxFailCount++;
@@ -3113,20 +3150,11 @@ static void updateFsdLightFeedbackStatus(const can_frame& frame) {
   if (readBitsLE(frame, 30, 2, raw)) {
     g_status.fsdLightLowBeamRightStatus = static_cast<uint8_t>(raw);
   }
-  if (readBitsLE(frame, 32, 2, raw)) {
-    g_status.fsdLightHighBeamLeftStatus = static_cast<uint8_t>(raw);
-  }
-  if (readBitsLE(frame, 34, 2, raw)) {
-    g_status.fsdLightHighBeamRightStatus = static_cast<uint8_t>(raw);
-  }
   if (readBitsLE(frame, 36, 2, raw)) {
     g_status.fsdLightDrlLeftStatus = static_cast<uint8_t>(raw);
   }
   if (readBitsLE(frame, 38, 2, raw)) {
     g_status.fsdLightDrlRightStatus = static_cast<uint8_t>(raw);
-  }
-  if (readBitsLE(frame, 58, 1, raw)) {
-    g_status.fsdLightHighBeamSwitchActive = static_cast<uint8_t>(raw);
   }
   if (readBitsLE(frame, 61, 1, raw)) {
     g_status.fsdLightLowBeamsOnForDrl = static_cast<uint8_t>(raw);
@@ -3144,11 +3172,6 @@ static uint8_t bitOnOrUnknown(uint8_t value) {
 }
 
 static uint8_t requestEqualsOrUnknown(uint8_t value, uint8_t expected) {
-  if (value == 255) return 255;
-  return value == expected ? 1 : 0;
-}
-
-static uint8_t offReasonEqualsOrUnknown(uint8_t value, uint8_t expected) {
   if (value == 255) return 255;
   return value == expected ? 1 : 0;
 }
@@ -3336,8 +3359,6 @@ static void serviceLockDeepSleep() {
   if (now - lockDeepSleepPendingMs < 50) return;
 
   canTxInhibitedForSleep = true;
-  g_status.highBeamStrobeActive = 0;
-  g_status.highBeamStrobeRemaining = 0;
   g_status.rearFogBrakeStrobeActive = 0;
   g_status.rearFogBrakeStrobeRemaining = 0;
   g_status.reverseStrobeActive = 0;
@@ -3521,8 +3542,6 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
       canb_send(highBeamFrame(highBeamStrobeOutputOn ? STALK_STATUS_PULL : STALK_STATUS_IDLE));
       highBeamStrobeLastSendMs = now;
     }
-    g_status.highBeamStrobeActive = 1;
-    g_status.highBeamStrobeRemaining = highBeamStrobePulsesRemaining;
     return;
   }
   highBeamStrobeLastToggleMs = now;
@@ -3540,9 +3559,6 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
     }
   }
   highBeamStrobeLastSendMs = now;
-
-  g_status.highBeamStrobeActive = 1;
-  g_status.highBeamStrobeRemaining = highBeamStrobePulsesRemaining;
 }
 
 static void serviceReverseStrobe(const RuntimeConfig& cfg) {
@@ -3833,8 +3849,6 @@ static void handleCanBFrame(const can_frame& frame) {
 
     const RuntimeConfig cfg = configSnapshot();
     const uint8_t stalkStatus = readStalkStatus(frame);
-    g_status.fsdLightStalkSeen = 1;
-    g_status.fsdLightStalkStatus = stalkStatus;
     const bool pullDown = stalkStatus == STALK_STATUS_PULL;
     const uint32_t now = canbLastStwActnRqMs;
 
@@ -3888,12 +3902,6 @@ static void handleCanBFrame(const can_frame& frame) {
     uint32_t raw = 0;
     if (readBitsLE(frame, 0, 2, raw)) {
       g_status.fsdLightForceHeadlightRequest = static_cast<uint8_t>(raw);
-    }
-    if (readBitsLE(frame, 10, 2, raw)) {
-      g_status.fsdLightForceHighBeamDecision = static_cast<uint8_t>(raw);
-    }
-    if (readBitsLE(frame, 12, 3, raw)) {
-      g_status.fsdLightForceHighBeamOffReason = static_cast<uint8_t>(raw);
     }
     if (readBitsLE(frame, 52, 4, raw)) {
       g_status.fsdLightForceBodyCounter = static_cast<uint8_t>(raw);
@@ -4219,8 +4227,6 @@ static void handleStatus() {
       fsdLightFeedbackLastRxMs == 0 ? 0 : (now - fsdLightFeedbackLastRxMs);
   s.fsdLightStatusAgeMs =
       fsdLightStatusLastRxMs == 0 ? 0 : (now - fsdLightStatusLastRxMs);
-  s.fsdLightStalkAgeMs =
-      canbLastStwActnRqMs == 0 ? 0 : (now - canbLastStwActnRqMs);
   s.fsdLightForce399AgeMs = nagKillerLastApMs == 0 ? 0 : (now - nagKillerLastApMs);
   s.fsdLightForceSwitchOn =
       (c.fsdForceHeadlightEnabled || c.fsdForceHighBeamEnabled) ? 1 : 0;
@@ -4238,29 +4244,13 @@ static void handleStatus() {
       (canbHasLastDasBodyControlsFrame && canbLastDasBodyControlsFrame.can_dlc >= 8) ? 1 : 0;
   s.fsdLightForce3f5Seen = fsdLightFeedbackLastRxMs != 0 ? 1 : 0;
   s.fsdLightForce3f6Seen = fsdLightStatusLastRxMs != 0 ? 1 : 0;
-  s.fsdLightStalkSeen = canbHasLastStwActnRqFrame ? 1 : 0;
   s.fsdLightForceHeadlightRequestOn =
       requestEqualsOrUnknown(s.fsdLightForceHeadlightRequest, 1);
-  s.fsdLightForceHighBeamRequestOn =
-      requestEqualsOrUnknown(s.fsdLightForceHighBeamDecision, 2);
   s.fsdLightActualHeadlightOn =
       lightAnyOnOrUnknown(s.fsdLightLowBeamLeftStatus, s.fsdLightLowBeamRightStatus);
-  s.fsdLightActualHighBeamOn =
-      lightAnyOnOrUnknown(s.fsdLightHighBeamLeftStatus, s.fsdLightHighBeamRightStatus);
   s.fsdLightActualDrlOn =
       lightAnyOnOrUnknown(s.fsdLightDrlLeftStatus, s.fsdLightDrlRightStatus);
   s.fsdLightLowBeamsOnForDrl = bitOnOrUnknown(s.fsdLightLowBeamsOnForDrl);
-  s.fsdLightHighBeamSwitchActive = bitOnOrUnknown(s.fsdLightHighBeamSwitchActive);
-  s.fsdLightHighBeamRejectVision =
-      offReasonEqualsOrUnknown(s.fsdLightForceHighBeamOffReason, 1);
-  s.fsdLightHighBeamRejectRadar =
-      offReasonEqualsOrUnknown(s.fsdLightForceHighBeamOffReason, 2);
-  s.fsdLightHighBeamRejectAmbient =
-      offReasonEqualsOrUnknown(s.fsdLightForceHighBeamOffReason, 3);
-  s.fsdLightHighBeamRejectHeadlight =
-      offReasonEqualsOrUnknown(s.fsdLightForceHighBeamOffReason, 4);
-  s.fsdLightHighBeamRejectSna =
-      offReasonEqualsOrUnknown(s.fsdLightForceHighBeamOffReason, 5);
   s.dndLastTriggerAgeMs = dndLastTriggerMs == 0 ? 0 : (now - dndLastTriggerMs);
   s.dndScrollCacheAgeMs = canbLastVcleftMux1Ms == 0 ? 0 : (now - canbLastVcleftMux1Ms);
 #endif
@@ -4310,9 +4300,19 @@ static void handleStatus() {
   if (nagKillerLastTxMs == 0 || (now - nagKillerLastTxMs) > 250UL) {
     s.nagKillerActive = 0;
   }
+  s.dasLcHandsOnReasonSeen = dasCarLogLastRxMs != 0 ? 1 : 0;
+  s.dasLcHandsOnReasonFrameAgeMs =
+      dasCarLogLastRxMs == 0 ? 0xFFFFFFFFUL : (now - dasCarLogLastRxMs);
+  s.dasLcHandsOnReasonLatestAgeMs =
+      dasLcHandsOnReasonLatestMs == 0 ? 0xFFFFFFFFUL : (now - dasLcHandsOnReasonLatestMs);
+  s.dasLcHandsOnReasonPreviousAgeMs =
+      dasLcHandsOnReasonPreviousMs == 0 ? 0xFFFFFFFFUL : (now - dasLcHandsOnReasonPreviousMs);
+  if (!s.dasLcHandsOnReasonSeen) {
+    s.dasLcHandsOnReasonDecode = DAS_LC_REASON_DECODE_NO_FRAME;
+  }
 
   String j;
-  j.reserve(12500);
+  j.reserve(13000);
   j += '{';
   j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
@@ -4417,8 +4417,6 @@ static void handleStatus() {
   j += ",\"freeHeapPct\":";          j += s.freeHeapPct;
   j += ",\"minFreeHeapPct\":";       j += s.minFreeHeapPct;
   j += ",\"cpuMhz\":";               j += s.cpuMhz;
-  j += ",\"highBeamStrobeActive\":"; j += s.highBeamStrobeActive;
-  j += ",\"highBeamStrobeRemaining\":"; j += s.highBeamStrobeRemaining;
   j += ",\"rearFogBrakeStrobeActive\":"; j += s.rearFogBrakeStrobeActive;
   j += ",\"rearFogBrakeStrobeRemaining\":"; j += s.rearFogBrakeStrobeRemaining;
   j += ",\"reverseStrobeActive\":"; j += s.reverseStrobeActive;
@@ -4441,38 +4439,24 @@ static void handleStatus() {
   j += ",\"fsdLightForce3e9DlcOk\":"; j += s.fsdLightForce3e9DlcOk;
   j += ",\"fsdLightForce3f5Seen\":"; j += s.fsdLightForce3f5Seen;
   j += ",\"fsdLightForce3f6Seen\":"; j += s.fsdLightForce3f6Seen;
-  j += ",\"fsdLightStalkSeen\":"; j += s.fsdLightStalkSeen;
   j += ",\"fsdLightForceHeadlightRequest\":"; j += s.fsdLightForceHeadlightRequest;
-  j += ",\"fsdLightForceHighBeamDecision\":"; j += s.fsdLightForceHighBeamDecision;
-  j += ",\"fsdLightForceHighBeamOffReason\":"; j += s.fsdLightForceHighBeamOffReason;
   j += ",\"fsdLightForceBodyCounter\":"; j += s.fsdLightForceBodyCounter;
   j += ",\"fsdLightForceHeadlightRequestOn\":"; j += s.fsdLightForceHeadlightRequestOn;
-  j += ",\"fsdLightForceHighBeamRequestOn\":"; j += s.fsdLightForceHighBeamRequestOn;
   j += ",\"fsdLightFeedbackAgeMs\":"; j += s.fsdLightFeedbackAgeMs;
   j += ",\"fsdLightStatusAgeMs\":"; j += s.fsdLightStatusAgeMs;
-  j += ",\"fsdLightStalkAgeMs\":"; j += s.fsdLightStalkAgeMs;
-  j += ",\"fsdLightStalkStatus\":"; j += s.fsdLightStalkStatus;
   j += ",\"fsdLightLowBeamLeftStatus\":"; j += s.fsdLightLowBeamLeftStatus;
   j += ",\"fsdLightLowBeamRightStatus\":"; j += s.fsdLightLowBeamRightStatus;
-  j += ",\"fsdLightHighBeamLeftStatus\":"; j += s.fsdLightHighBeamLeftStatus;
-  j += ",\"fsdLightHighBeamRightStatus\":"; j += s.fsdLightHighBeamRightStatus;
   j += ",\"fsdLightDrlLeftStatus\":"; j += s.fsdLightDrlLeftStatus;
   j += ",\"fsdLightDrlRightStatus\":"; j += s.fsdLightDrlRightStatus;
   j += ",\"fsdLightLowBeamsOnForDrl\":"; j += s.fsdLightLowBeamsOnForDrl;
-  j += ",\"fsdLightHighBeamSwitchActive\":"; j += s.fsdLightHighBeamSwitchActive;
   j += ",\"fsdLightActualHeadlightOn\":"; j += s.fsdLightActualHeadlightOn;
-  j += ",\"fsdLightActualHighBeamOn\":"; j += s.fsdLightActualHighBeamOn;
   j += ",\"fsdLightActualDrlOn\":"; j += s.fsdLightActualDrlOn;
-  j += ",\"fsdLightHighBeamRejectVision\":"; j += s.fsdLightHighBeamRejectVision;
-  j += ",\"fsdLightHighBeamRejectRadar\":"; j += s.fsdLightHighBeamRejectRadar;
-  j += ",\"fsdLightHighBeamRejectAmbient\":"; j += s.fsdLightHighBeamRejectAmbient;
-  j += ",\"fsdLightHighBeamRejectHeadlight\":"; j += s.fsdLightHighBeamRejectHeadlight;
-  j += ",\"fsdLightHighBeamRejectSna\":"; j += s.fsdLightHighBeamRejectSna;
   j += ",\"uiHandsOnReqActive\":"; j += s.uiHandsOnReqActive;
   j += ",\"uiHandsOnReqBlocked\":"; j += s.uiHandsOnReqBlocked;
   j += ",\"uiHandsOnReqSeen\":"; j += s.uiHandsOnReqSeen;
   j += ",\"uiHandsOnReqDlc\":"; j += s.uiHandsOnReqDlc;
   j += ",\"uiHandsOnReqLiveValue\":"; j += s.uiHandsOnReqLiveValue;
+  j += ",\"uiHandsOnReqStatus\":"; j += s.uiHandsOnReqLiveValue;
   j += ",\"uiHandsOnReqSentValue\":"; j += s.uiHandsOnReqSentValue;
   j += ",\"uiHandsOnReqTargetId\":"; j += s.uiHandsOnReqTargetId;
   j += ",\"uiHandsOnReqRxAgeMs\":"; j += s.uiHandsOnReqRxAgeMs;
@@ -4562,6 +4546,14 @@ static void handleStatus() {
   j += ",\"nagKillerDndRemaining\":"; j += s.nagKillerDndRemaining;
   j += ",\"nagKillerDndTriggerCount\":"; j += s.nagKillerDndTriggerCount;
   j += ",\"nagKillerDndLastTriggerAgeMs\":"; j += s.nagKillerDndLastTriggerAgeMs;
+  j += ",\"dasLcHandsOnReasonSeen\":"; j += s.dasLcHandsOnReasonSeen;
+  j += ",\"dasLcHandsOnReasonDlc\":"; j += s.dasLcHandsOnReasonDlc;
+  j += ",\"dasLcHandsOnReasonDecode\":"; j += s.dasLcHandsOnReasonDecode;
+  j += ",\"dasLcHandsOnReasonPrevious\":"; j += s.dasLcHandsOnReasonPrevious;
+  j += ",\"dasLcHandsOnReasonLatest\":"; j += s.dasLcHandsOnReasonLatest;
+  j += ",\"dasLcHandsOnReasonFrameAgeMs\":"; j += s.dasLcHandsOnReasonFrameAgeMs;
+  j += ",\"dasLcHandsOnReasonPreviousAgeMs\":"; j += s.dasLcHandsOnReasonPreviousAgeMs;
+  j += ",\"dasLcHandsOnReasonLatestAgeMs\":"; j += s.dasLcHandsOnReasonLatestAgeMs;
   j += ",\"bmsTempFrameSeen\":"; j += s.bmsTempFrameSeen;
   j += ",\"bmsTempFrameId\":"; j += s.bmsTempFrameId;
   j += ",\"bmsTempFrameBus\":"; j += s.bmsTempFrameBus;
@@ -5279,6 +5271,7 @@ void loop() {
     RuntimeConfig cfg = configSnapshot();
     speedLimitMonitor.update(frame);
     handleNagKillerContextFrame(frame);
+    handleDasCarLogFrame(frame);
 #ifndef ENABLE_CANB_MCP2515
     handleNagKillerTargetFrame(frame, cfg);
 #endif
