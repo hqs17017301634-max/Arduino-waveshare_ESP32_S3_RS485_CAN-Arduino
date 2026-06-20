@@ -2213,10 +2213,12 @@ constexpr uint8_t REVERSE_STROBE_PULSES = 4;
 constexpr uint8_t REAR_FOG_PRIORITY_PEDAL = 1;
 constexpr uint8_t REAR_FOG_PRIORITY_BODY = 2;
 constexpr uint8_t REAR_FOG_PRIORITY_REVERSE = 3;
-constexpr uint16_t HIGH_BEAM_STROBE_INTERVAL_MS = 75;
+constexpr uint16_t HIGH_BEAM_STROBE_INTERVAL_MS = 45;
 constexpr uint16_t HIGH_BEAM_STROBE_RESEND_MS = 45;
 constexpr uint16_t FSD_OVERTAKE_LIGHT_TRIGGER_HOLD_MS = 3000;
 constexpr uint16_t FSD_OVERTAKE_LIGHT_FORCE_PERIOD_MS = HIGH_BEAM_STROBE_RESEND_MS;
+constexpr uint8_t OVERTAKE_LIGHT_ALWAYS_ON_PULL_COUNT = 3;
+constexpr uint16_t OVERTAKE_LIGHT_ALWAYS_ON_PULL_WINDOW_MS = 3000;
 constexpr uint16_t REAR_FOG_STROBE_INTERVAL_MS = 135;
 // Hazard (0x3C2 bit3) is a momentary TOGGLE button: one click toggles hazards
 // on/off. Reverse = one click ON -> hold REVERSE_HAZARD_ON_MS (car flashes
@@ -2245,7 +2247,7 @@ constexpr float LOCK_SLEEP_MAX_SPEED_KPH = 1.0f;
 constexpr float REAR_FOG_MILD_DECEL_THRESHOLD = -0.80f;
 constexpr float REAR_FOG_HARD_DECEL_THRESHOLD = -2.50f;
 constexpr float REAR_FOG_VERY_HARD_DECEL_THRESHOLD = -3.50f;
-constexpr uint16_t HIGH_BEAM_DOUBLE_PULL_WINDOW_MS = 1200;
+constexpr uint16_t HIGH_BEAM_DOUBLE_PULL_WINDOW_MS = 1000;
 constexpr uint8_t STALK_STATUS_IDLE = 0;
 constexpr uint8_t STALK_STATUS_PULL = 1;
 constexpr uint8_t STALK_TURN_IDLE = 0;
@@ -2333,6 +2335,9 @@ static bool fsdOvertakeLightLongPullTriggered = false;
 static uint32_t fsdOvertakeLightPullStartMs = 0;
 static volatile bool fsdOvertakeLightForceOutputOn = false;
 static volatile uint32_t fsdOvertakeLightForceLastTxMs = 0;
+static bool overtakeLightAlwaysOnLatched = false;
+static uint8_t overtakeLightAlwaysOnPullCount = 0;
+static uint32_t overtakeLightAlwaysOnLastPullMs = 0;
 static bool highBeamLastPullDown = false;
 static uint8_t highBeamPullCount = 0;
 static uint32_t highBeamLastPullMs = 0;
@@ -3604,7 +3609,14 @@ static void stopFsdOvertakeLightForce(const RuntimeConfig& cfg, bool sendIdle) {
 static void serviceFsdOvertakeLightForce(const RuntimeConfig& cfg) {
   const uint32_t now = millis();
   const bool canbOk = cfg.canbEnabled && canbReady;
-  if (cfg.overtakeLightAlwaysOnEnabled && canbOk) {
+  if (!cfg.overtakeLightAlwaysOnEnabled || !canbOk) {
+    if (overtakeLightAlwaysOnLatched && fsdOvertakeLightForceOutputOn) {
+      stopFsdOvertakeLightForce(cfg, true);
+    }
+    overtakeLightAlwaysOnLatched = false;
+    overtakeLightAlwaysOnPullCount = 0;
+    overtakeLightAlwaysOnLastPullMs = 0;
+  } else if (overtakeLightAlwaysOnLatched) {
     fsdOvertakeLightForceLatched = false;
     fsdOvertakeLightPullStartMs = 0;
     fsdOvertakeLightLongPullTriggered = false;
@@ -3948,6 +3960,7 @@ static void handleCanBFrame(const can_frame& frame) {
     const uint8_t stalkStatus = readStalkStatus(frame);
     const bool pullDown = stalkStatus == STALK_STATUS_PULL;
     const uint32_t now = canbLastStwActnRqMs;
+    const bool pullEdge = pullDown && !highBeamLastPullDown;
     const bool overtakeLightTriggerAllowed =
         cfg.fsdForceOvertakeLightEnabled &&
         cfg.canbEnabled &&
@@ -3956,11 +3969,74 @@ static void handleCanBFrame(const can_frame& frame) {
         nagKillerApStateActive(nagKillerApState);
     bool pullEdgeConsumed = false;
 
-    if (!overtakeLightTriggerAllowed) {
+    if (!cfg.highBeamStrobeEnabled) {
+      highBeamPullCount = 0;
+      highBeamLastPullMs = 0;
+    } else if (pullEdge && !highBeamStrobeActive) {
+      if (highBeamLastPullMs == 0 ||
+          (now - highBeamLastPullMs) > HIGH_BEAM_DOUBLE_PULL_WINDOW_MS) {
+        highBeamPullCount = 0;
+      }
+      highBeamLastPullMs = now;
+      highBeamPullCount++;
+      if (highBeamPullCount >= 2) {
+        highBeamPullCount = 0;
+        highBeamLastPullMs = 0;
+        overtakeLightAlwaysOnLatched = false;
+        overtakeLightAlwaysOnPullCount = 0;
+        overtakeLightAlwaysOnLastPullMs = 0;
+        stopFsdOvertakeLightForce(cfg, true);
+        startHighBeamStrobe();
+        pullEdgeConsumed = true;
+      }
+    }
+
+    if (cfg.overtakeLightAlwaysOnEnabled && cfg.canbEnabled && canbReady) {
+      if (overtakeLightAlwaysOnPullCount != 0 &&
+          overtakeLightAlwaysOnLastPullMs != 0 &&
+          (now - overtakeLightAlwaysOnLastPullMs) > OVERTAKE_LIGHT_ALWAYS_ON_PULL_WINDOW_MS) {
+        overtakeLightAlwaysOnPullCount = 0;
+      }
+      if (!pullEdgeConsumed && pullEdge) {
+        if (overtakeLightAlwaysOnLatched) {
+          overtakeLightAlwaysOnLatched = false;
+          stopFsdOvertakeLightForce(cfg, true);
+          overtakeLightAlwaysOnPullCount = 0;
+          overtakeLightAlwaysOnLastPullMs = 0;
+          pullEdgeConsumed = true;
+        } else {
+          if (overtakeLightAlwaysOnLastPullMs == 0 ||
+              (now - overtakeLightAlwaysOnLastPullMs) > OVERTAKE_LIGHT_ALWAYS_ON_PULL_WINDOW_MS) {
+            overtakeLightAlwaysOnPullCount = 0;
+          }
+          overtakeLightAlwaysOnLastPullMs = now;
+          overtakeLightAlwaysOnPullCount++;
+          if (overtakeLightAlwaysOnPullCount >= OVERTAKE_LIGHT_ALWAYS_ON_PULL_COUNT) {
+            overtakeLightAlwaysOnLatched = true;
+            overtakeLightAlwaysOnPullCount = 0;
+            overtakeLightAlwaysOnLastPullMs = 0;
+            fsdOvertakeLightForceLatched = false;
+            fsdOvertakeLightPullStartMs = 0;
+            fsdOvertakeLightLongPullTriggered = false;
+            fsdOvertakeLightForceLastTxMs = 0;
+            if (highBeamStrobeActive || highBeamStrobeOutputOn) stopHighBeamStrobe(false);
+          }
+          pullEdgeConsumed = true;
+        }
+      }
+    } else {
+      overtakeLightAlwaysOnPullCount = 0;
+      overtakeLightAlwaysOnLastPullMs = 0;
+    }
+
+    if (pullEdgeConsumed) {
+      fsdOvertakeLightPullStartMs = 0;
+      fsdOvertakeLightLongPullTriggered = false;
+    } else if (!overtakeLightTriggerAllowed) {
       fsdOvertakeLightPullStartMs = 0;
       fsdOvertakeLightLongPullTriggered = false;
     } else if (pullDown) {
-      if (!highBeamLastPullDown) {
+      if (pullEdge) {
         if (fsdOvertakeLightForceLatched) {
           fsdOvertakeLightForceLatched = false;
           stopFsdOvertakeLightForce(cfg, true);
@@ -3985,20 +4061,6 @@ static void handleCanBFrame(const can_frame& frame) {
       fsdOvertakeLightLongPullTriggered = false;
     }
 
-    if (!cfg.highBeamStrobeEnabled) {
-      highBeamPullCount = 0;
-    } else if (!pullEdgeConsumed && pullDown && !highBeamLastPullDown && !highBeamStrobeActive) {
-      if (highBeamLastPullMs == 0 ||
-          (now - highBeamLastPullMs) > HIGH_BEAM_DOUBLE_PULL_WINDOW_MS) {
-        highBeamPullCount = 0;
-      }
-      highBeamLastPullMs = now;
-      highBeamPullCount++;
-      if (highBeamPullCount >= 2) {
-        highBeamPullCount = 0;
-        startHighBeamStrobe();
-      }
-    }
     highBeamLastPullDown = pullDown;
   }
 

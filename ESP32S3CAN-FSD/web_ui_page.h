@@ -68,11 +68,11 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="card">
 <h2>灯光 / 车身</h2>
 <label>高光爆闪启用<input type="checkbox" id="highBeamStrobeEnabled"></label>
-<p class="hint">bus=2/MCP2515/物理CANA，0x249，超车灯拨杆下拉两次触发 8 次，75ms ON / 75ms OFF，结束强制 idle。</p>
+<p class="hint">bus=2/MCP2515/物理CANA，0x249，1秒内下拉两次触发 8 次，45ms ON / 45ms OFF，优先级最高，结束强制 idle。</p>
 <label>FSD强制超车灯<input type="checkbox" id="fsdForceOvertakeLightEnabled"></label>
 <p class="hint">开关打开后，FSD/AP active 时手动拨杆下拉保持 3 秒开启；开启后再下拉一下关闭。输出使用同一个 0x249 超车灯帧持续发送 PULL。</p>
 <label>超车灯常ON<input type="checkbox" id="overtakeLightAlwaysOnEnabled"></label>
-<p class="hint">打开后不判断 FSD/AP，持续约 45ms 发送 0x249 PULL；关闭时补一帧 idle。</p>
+<p class="hint">打开后启用拨杆手势：三下开启常ON；常ON时一下取消，两下取消并触发爆闪。1秒内两下会优先爆闪；常ON输出约 45ms 一帧 0x249 PULL。</p>
 <label>后雾灯刹车爆闪启用<input type="checkbox" id="rearFogBrakeStrobeEnabled"></label>
 <p class="hint">缓减速触发 3 次，急减速或车身刹车灯触发 6 次，输出使用 0x273 后雾灯位。</p>
 <label>倒挡双闪雾灯启用<input type="checkbox" id="reverseStrobeEnabled"></label>
