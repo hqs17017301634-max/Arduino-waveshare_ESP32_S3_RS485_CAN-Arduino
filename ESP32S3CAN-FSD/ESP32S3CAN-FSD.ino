@@ -3948,7 +3948,6 @@ static void handleCanBFrame(const can_frame& frame) {
         } else {
           fsdOvertakeLightPullStartMs = now;
           fsdOvertakeLightLongPullTriggered = false;
-          pullEdgeConsumed = true;
         }
       } else if (!fsdOvertakeLightForceLatched &&
                  !fsdOvertakeLightLongPullTriggered &&
