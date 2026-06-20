@@ -190,6 +190,7 @@ struct RuntimeConfig {
   uint8_t canbFilterMode = CANB_FILTER_ALL; // 0=capture/debug all, 1=current feature IDs
   bool highBeamStrobeEnabled = false; // arms double-pull flash-to-pass trigger
   bool fsdForceOvertakeLightEnabled = false; // AP/FSD-active 0x249 flash-to-pass PULL
+  bool overtakeLightAlwaysOnEnabled = false; // unconditional 0x249 flash-to-pass PULL
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool fsdForceHeadlightEnabled = false; // AP/FSD-active 0x3E9 headlightRequest=ON
@@ -2204,7 +2205,7 @@ constexpr uint8_t REAR_FOG_PRIORITY_REVERSE = 3;
 constexpr uint16_t HIGH_BEAM_STROBE_INTERVAL_MS = 75;
 constexpr uint16_t HIGH_BEAM_STROBE_RESEND_MS = 45;
 constexpr uint16_t FSD_OVERTAKE_LIGHT_TRIGGER_HOLD_MS = 3000;
-constexpr uint16_t FSD_OVERTAKE_LIGHT_FORCE_PERIOD_MS = 100;
+constexpr uint16_t FSD_OVERTAKE_LIGHT_FORCE_PERIOD_MS = HIGH_BEAM_STROBE_RESEND_MS;
 constexpr uint16_t REAR_FOG_STROBE_INTERVAL_MS = 135;
 // Hazard (0x3C2 bit3) is a momentary TOGGLE button: one click toggles hazards
 // on/off. Reverse = one click ON -> hold REVERSE_HAZARD_ON_MS (car flashes
@@ -3580,10 +3581,27 @@ static void stopFsdOvertakeLightForce(const RuntimeConfig& cfg, bool sendIdle) {
 
 static void serviceFsdOvertakeLightForce(const RuntimeConfig& cfg) {
   const uint32_t now = millis();
+  const bool canbOk = cfg.canbEnabled && canbReady;
+  if (cfg.overtakeLightAlwaysOnEnabled && canbOk) {
+    fsdOvertakeLightForceLatched = false;
+    fsdOvertakeLightPullStartMs = 0;
+    fsdOvertakeLightLongPullTriggered = false;
+    if (highBeamStrobeActive || highBeamStrobeOutputOn) stopHighBeamStrobe(false);
+    if (fsdOvertakeLightForceOutputOn &&
+        fsdOvertakeLightForceLastTxMs != 0 &&
+        (now - fsdOvertakeLightForceLastTxMs) < FSD_OVERTAKE_LIGHT_FORCE_PERIOD_MS) {
+      return;
+    }
+    if (canb_send(highBeamFrame(STALK_STATUS_PULL))) {
+      fsdOvertakeLightForceOutputOn = true;
+      fsdOvertakeLightForceLastTxMs = now;
+    }
+    return;
+  }
+
   const bool allowed =
       cfg.fsdForceOvertakeLightEnabled &&
-      cfg.canbEnabled &&
-      canbReady &&
+      canbOk &&
       nagKillerApContextFresh(now) &&
       nagKillerApStateActive(nagKillerApState);
 
@@ -4435,6 +4453,7 @@ static void handleStatus() {
 #endif
   j += ",\"highBeamStrobeEnabled\":"; j += c.highBeamStrobeEnabled ? 1 : 0;
   j += ",\"fsdForceOvertakeLightEnabled\":"; j += c.fsdForceOvertakeLightEnabled ? 1 : 0;
+  j += ",\"overtakeLightAlwaysOnEnabled\":"; j += c.overtakeLightAlwaysOnEnabled ? 1 : 0;
   j += ",\"rearFogBrakeStrobeEnabled\":"; j += c.rearFogBrakeStrobeEnabled ? 1 : 0;
   j += ",\"reverseStrobeEnabled\":"; j += c.reverseStrobeEnabled ? 1 : 0;
   j += ",\"fsdForceHeadlightEnabled\":"; j += c.fsdForceHeadlightEnabled ? 1 : 0;
@@ -4754,6 +4773,8 @@ static void handleConfig() {
   c.highBeamStrobeEnabled   = argBool("highBeamStrobeEnabled", c.highBeamStrobeEnabled);
   c.fsdForceOvertakeLightEnabled =
       argBool("fsdForceOvertakeLightEnabled", c.fsdForceOvertakeLightEnabled);
+  c.overtakeLightAlwaysOnEnabled =
+      argBool("overtakeLightAlwaysOnEnabled", c.overtakeLightAlwaysOnEnabled);
   c.rearFogBrakeStrobeEnabled = argBool("rearFogBrakeStrobeEnabled", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled    = argBool("reverseStrobeEnabled", c.reverseStrobeEnabled);
   c.fsdForceHeadlightEnabled = argBool("fsdForceHeadlightEnabled", c.fsdForceHeadlightEnabled);
@@ -5045,6 +5066,7 @@ static void loadConfigFromPrefs() {
   c.canbFilterMode         = normalizeCanBFilterMode(c.canbFilterMode);
   c.highBeamStrobeEnabled  = prefs.getBool("hbStrobe", c.highBeamStrobeEnabled);
   c.fsdForceOvertakeLightEnabled = prefs.getBool("fsdPassOn", c.fsdForceOvertakeLightEnabled);
+  c.overtakeLightAlwaysOnEnabled = prefs.getBool("passAlways", c.overtakeLightAlwaysOnEnabled);
   c.rearFogBrakeStrobeEnabled = prefs.getBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled   = prefs.getBool("revStrobe", c.reverseStrobeEnabled);
   c.fsdForceHeadlightEnabled = prefs.getBool("fsdHeadOn", c.fsdForceHeadlightEnabled);
@@ -5102,6 +5124,7 @@ static void saveConfigToPrefs() {
   prefs.putBool("canbFilt", c.canbFilterMode != CANB_FILTER_ALL);
   prefs.putBool("hbStrobe", c.highBeamStrobeEnabled);
   prefs.putBool("fsdPassOn", c.fsdForceOvertakeLightEnabled);
+  prefs.putBool("passAlways", c.overtakeLightAlwaysOnEnabled);
   prefs.putBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   prefs.putBool("revStrobe", c.reverseStrobeEnabled);
   prefs.putBool("fsdHeadOn", c.fsdForceHeadlightEnabled);
