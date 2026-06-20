@@ -710,7 +710,10 @@ static bool twai_send(const can_frame& frame) {
 
 static bool nagKillerSendFrame(const can_frame& frame) {
 #ifdef ENABLE_CANB_MCP2515
-  return canb_send(frame, CANB_TX_SRC_NAG);  // T-2CAN: Nag-Killer lives on bus=2 / MCP2515 / physical CANA.
+  // T-2CAN: Nag-Killer lives on bus=2 / MCP2515 / physical CANA.
+  // Keep only the newest torque frame per target ID so stale torque never builds up.
+  return canbScheduleTx(frame, CANB_TX_SRC_NAG, CANB_TX_PRIO_HIGH,
+                        CANB_TX_TTL_FAST_MS, true);
 #else
   return twai_send(frame);
 #endif
@@ -2661,7 +2664,7 @@ static bool dndActionAllowed(const RuntimeConfig& cfg, bool requireSwitches) {
   return true;
 }
 
-static bool sendDndVolumeFrame(uint8_t cmd) {
+static bool sendDndVolumeFrame(uint8_t cmd, bool direct, uint8_t priority) {
   if (!dndScrollCacheFresh()) {
     g_status.dndBlocked = DND_BLOCK_NO_CACHE;
     return false;
@@ -2678,7 +2681,10 @@ static bool sendDndVolumeFrame(uint8_t cmd) {
   // while data[2] changes, so only change the left-scroll tick byte here.
   f.data[2] = cmd;
 
-  if (!canb_send(f, CANB_TX_SRC_DND)) {
+  const bool sent = direct
+      ? canb_send(f, CANB_TX_SRC_DND)
+      : canbScheduleTx(f, CANB_TX_SRC_DND, priority, CANB_TX_TTL_SCROLL_MS);
+  if (!sent) {
     g_status.dndBlocked = DND_BLOCK_CANB;
     return false;
   }
@@ -2763,7 +2769,9 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
     return;
   }
 
-  if (!sendDndVolumeFrame(sequence[dndActionStep])) {
+  const bool nagLinkedDnd = !dndActionRequireSwitches;
+  const uint8_t priority = nagLinkedDnd ? CANB_TX_PRIO_HIGH : CANB_TX_PRIO_MED;
+  if (!sendDndVolumeFrame(sequence[dndActionStep], nagLinkedDnd, priority)) {
     dndActionActive = false;
     dndActionRequireSwitches = true;
     g_status.dndActionActive = 0;
@@ -3085,8 +3093,8 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
       (now - highBeamStrobeLastToggleMs) < HIGH_BEAM_STROBE_INTERVAL_MS) {
     if (highBeamStrobeLastSendMs == 0 ||
         (now - highBeamStrobeLastSendMs) >= HIGH_BEAM_STROBE_RESEND_MS) {
-      canb_send(highBeamFrame(highBeamStrobeOutputOn ? STALK_STATUS_PULL : STALK_STATUS_IDLE),
-                CANB_TX_SRC_LIGHT);
+      canbScheduleTx(highBeamFrame(highBeamStrobeOutputOn ? STALK_STATUS_PULL : STALK_STATUS_IDLE),
+                     CANB_TX_SRC_LIGHT, CANB_TX_PRIO_MED, CANB_TX_TTL_FAST_MS);
       highBeamStrobeLastSendMs = now;
     }
     return;
@@ -3094,10 +3102,12 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
   highBeamStrobeLastToggleMs = now;
 
   if (!highBeamStrobeOutputOn) {
-    canb_send(highBeamFrame(STALK_STATUS_PULL), CANB_TX_SRC_LIGHT);
+    canbScheduleTx(highBeamFrame(STALK_STATUS_PULL), CANB_TX_SRC_LIGHT,
+                   CANB_TX_PRIO_MED, CANB_TX_TTL_FAST_MS);
     highBeamStrobeOutputOn = true;
   } else {
-    canb_send(highBeamFrame(STALK_STATUS_IDLE), CANB_TX_SRC_LIGHT);
+    canbScheduleTx(highBeamFrame(STALK_STATUS_IDLE), CANB_TX_SRC_LIGHT,
+                   CANB_TX_PRIO_MED, CANB_TX_TTL_FAST_MS);
     highBeamStrobeOutputOn = false;
     if (highBeamStrobePulsesRemaining > 0) highBeamStrobePulsesRemaining--;
     if (highBeamStrobePulsesRemaining == 0) {
