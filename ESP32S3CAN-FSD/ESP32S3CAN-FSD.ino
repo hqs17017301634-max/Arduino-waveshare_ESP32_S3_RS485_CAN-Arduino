@@ -391,6 +391,13 @@ struct RuntimeStatus {
   int batteryPreheatBms332AvgCx100 = -32768;
   int batteryPreheatBms332MaxCx100 = -32768;
   char batteryPreheatBms332Payload[24] = "-";
+  uint8_t batteryPreheatBms312Seen = 0;
+  uint8_t batteryPreheatBms312Bus = 0;
+  uint32_t batteryPreheatBms312AgeMs = 0;
+  uint8_t batteryPreheatBms3b2Seen = 0;
+  uint8_t batteryPreheatBms3b2Bus = 0;
+  uint32_t batteryPreheatBms3b2AgeMs = 0;
+  uint8_t batteryPreheatBmsHeatStatus = 0;
   uint8_t batteryPreheatVcfrontSeen = 0;
   uint8_t batteryPreheatVcfrontBus = 0;
   uint32_t batteryPreheatVcfrontAgeMs = 0;
@@ -690,6 +697,8 @@ static uint32_t lockSleepSeatSeenMs = 0;
 static uint32_t batteryPreheatFeedbackLastRxMs = 0;
 static uint32_t batteryPreheatBmsStatusLastRxMs = 0;
 static uint32_t batteryPreheatBms332LastRxMs = 0;
+static uint32_t batteryPreheatBms312LastRxMs = 0;
+static uint32_t batteryPreheatBms3b2LastRxMs = 0;
 static uint32_t batteryPreheatVcfrontLastRxMs = 0;
 static uint32_t uiHandsOnReqLastRxMs = 0;
 static uint32_t uiHandsOnReqLastTxMs = 0;
@@ -896,6 +905,7 @@ constexpr uint32_t CAN_ID_BMS_THERMAL_STATUS = 0x312;
 constexpr uint32_t CAN_ID_VCFRONT_SENSORS = 0x321;
 constexpr uint32_t CAN_ID_BMS_BMB_MIN_MAX = 0x332;
 constexpr uint32_t CAN_ID_BMS_LOG1 = 0x374;
+constexpr uint32_t CAN_ID_BMS_LOG2 = 0x3B2;
 constexpr uint32_t CAN_ID_BMS_PACK_TEMPERATURES = 0x712;
 constexpr uint32_t CAN_ID_DAS_STATUS = 0x399;
 constexpr uint32_t CAN_ID_DAS_CAR_LOG = 0x5D9;
@@ -929,6 +939,7 @@ static inline bool isRelevantCanId(uint32_t canId) {
          canId == CAN_ID_VCFRONT_SENSORS ||
          canId == CAN_ID_BMS_BMB_MIN_MAX ||
          canId == CAN_ID_BMS_LOG1 ||
+         canId == CAN_ID_BMS_LOG2 ||
          canId == CAN_ID_BMS_PACK_TEMPERATURES ||
          canId == CAN_ID_DAS_STATUS ||
          canId == CAN_ID_DAS_CAR_LOG ||
@@ -2438,7 +2449,7 @@ static bool applyCanBFilters(uint8_t mode) {
     if (canb.setFilterMask(MCP2515::MASK1, false, 0x60C) != MCP2515::ERROR_OK) return false;
     // Covers: 0x229, 0x249, 0x339, 0x399, 0x3E9.
     if (canb.setFilter(MCP2515::RXF2, false, 0x209) != MCP2515::ERROR_OK) return false;
-    // Covers: 0x273, 0x313, 0x332.
+    // Covers: 0x273, 0x313, 0x332, 0x3B2.
     if (canb.setFilter(MCP2515::RXF3, false, 0x203) != MCP2515::ERROR_OK) return false;
     // Covers: 0x321, 0x370.
     if (canb.setFilter(MCP2515::RXF4, false, 0x200) != MCP2515::ERROR_OK) return false;
@@ -3463,15 +3474,26 @@ static void handleBatteryTempDiagFrame(const can_frame& frame, uint8_t bus) {
   if (frame.can_id != CAN_ID_BMS_THERMAL_STATUS &&
       frame.can_id != CAN_ID_BMS_PACK_TEMPERATURES &&
       frame.can_id != CAN_ID_BMS_BMB_MIN_MAX &&
-      frame.can_id != CAN_ID_BMS_LOG1) {
+      frame.can_id != CAN_ID_BMS_LOG1 &&
+      frame.can_id != CAN_ID_BMS_LOG2) {
     return;
   }
-  bmsTempLastRxMs = millis();
+  const uint32_t now = millis();
+  bmsTempLastRxMs = now;
   g_status.bmsTempFrameSeen = 1;
   g_status.bmsTempFrameId = frame.can_id;
   g_status.bmsTempFrameBus = bus;
   g_status.bmsTempFrameMux = frame.can_dlc > 0 ? static_cast<uint8_t>(frame.data[0] & 0x0F) : 0;
   formatPayload8(frame, g_status.bmsTempFramePayload);
+  if (frame.can_id == CAN_ID_BMS_THERMAL_STATUS) {
+    batteryPreheatBms312LastRxMs = now;
+    g_status.batteryPreheatBms312Seen = 1;
+    g_status.batteryPreheatBms312Bus = bus;
+  } else if (frame.can_id == CAN_ID_BMS_LOG2) {
+    batteryPreheatBms3b2LastRxMs = now;
+    g_status.batteryPreheatBms3b2Seen = 1;
+    g_status.batteryPreheatBms3b2Bus = bus;
+  }
   handleBms712TemperatureFrame(frame);
 }
 
@@ -4313,6 +4335,10 @@ static void handleStatus() {
       batteryPreheatBmsStatusLastRxMs == 0 ? 0 : (now - batteryPreheatBmsStatusLastRxMs);
   s.batteryPreheatBms332AgeMs =
       batteryPreheatBms332LastRxMs == 0 ? 0 : (now - batteryPreheatBms332LastRxMs);
+  s.batteryPreheatBms312AgeMs =
+      batteryPreheatBms312LastRxMs == 0 ? 0 : (now - batteryPreheatBms312LastRxMs);
+  s.batteryPreheatBms3b2AgeMs =
+      batteryPreheatBms3b2LastRxMs == 0 ? 0 : (now - batteryPreheatBms3b2LastRxMs);
   s.batteryPreheatVcfrontAgeMs =
       batteryPreheatVcfrontLastRxMs == 0 ? 0 : (now - batteryPreheatVcfrontLastRxMs);
   s.batteryPreheatBlockMask = batteryPreheatComputeBlockMask(c, now);
@@ -4321,6 +4347,13 @@ static void handleStatus() {
       (now - batteryPreheatFeedbackLastRxMs) <= BATTERY_PREHEAT_TEMP_FRESH_MS;
   s.batteryPreheatHeatingActive =
       batteryPreheatFeedbackFresh ? (s.batteryPreheatUiState == 1 ? 1 : 0) : 255;
+  const bool bms312Fresh =
+      batteryPreheatBms312LastRxMs != 0 &&
+      (now - batteryPreheatBms312LastRxMs) <= BATTERY_PREHEAT_TEMP_FRESH_MS;
+  const bool bms3b2Fresh =
+      batteryPreheatBms3b2LastRxMs != 0 &&
+      (now - batteryPreheatBms3b2LastRxMs) <= BATTERY_PREHEAT_TEMP_FRESH_MS;
+  s.batteryPreheatBmsHeatStatus = (bms312Fresh || bms3b2Fresh) ? 1 : 0;
   s.bmsTempFrameAgeMs = bmsTempLastRxMs == 0 ? 0 : (now - bmsTempLastRxMs);
   s.bmsTempDecodedAgeMs =
       bmsTempDecodedLastRxMs == 0 ? 0 : (now - bmsTempDecodedLastRxMs);
@@ -4619,6 +4652,13 @@ static void handleStatus() {
   j += ",\"batteryPreheatBms332AvgCx100\":"; j += s.batteryPreheatBms332AvgCx100;
   j += ",\"batteryPreheatBms332MaxCx100\":"; j += s.batteryPreheatBms332MaxCx100;
   j += ",\"batteryPreheatBms332Payload\":\""; j += s.batteryPreheatBms332Payload; j += '"';
+  j += ",\"batteryPreheatBms312Seen\":"; j += s.batteryPreheatBms312Seen;
+  j += ",\"batteryPreheatBms312Bus\":"; j += s.batteryPreheatBms312Bus;
+  j += ",\"batteryPreheatBms312AgeMs\":"; j += s.batteryPreheatBms312AgeMs;
+  j += ",\"batteryPreheatBms3b2Seen\":"; j += s.batteryPreheatBms3b2Seen;
+  j += ",\"batteryPreheatBms3b2Bus\":"; j += s.batteryPreheatBms3b2Bus;
+  j += ",\"batteryPreheatBms3b2AgeMs\":"; j += s.batteryPreheatBms3b2AgeMs;
+  j += ",\"batteryPreheatBmsHeatStatus\":"; j += s.batteryPreheatBmsHeatStatus;
   j += ",\"batteryPreheatVcfrontSeen\":"; j += s.batteryPreheatVcfrontSeen;
   j += ",\"batteryPreheatVcfrontBus\":"; j += s.batteryPreheatVcfrontBus;
   j += ",\"batteryPreheatVcfrontAgeMs\":"; j += s.batteryPreheatVcfrontAgeMs;

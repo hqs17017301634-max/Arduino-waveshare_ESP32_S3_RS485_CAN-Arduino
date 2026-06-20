@@ -226,14 +226,17 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>车辆充电状态 / 来源 / 更新时间</span><span><b id="batteryPreheatChargeStatus">-</b> / <b id="batteryPreheatChargeStatusBus">-</b> / <b id="batteryPreheatChargeStatusAgeMs">-</b></span></div>
 <div class="kv"><span>电量SOC / 来源 / 更新时间</span><span><b id="batteryPreheatSocUiDeciPct">-</b> / <b id="batteryPreheatSocBus">-</b> / <b id="batteryPreheatSocAgeMs">-</b></span></div>
 <div class="kv"><span>预热指令反馈 / 来源 / 更新时间</span><span><b id="batteryPreheatFeedbackSeen">-</b> / <b id="batteryPreheatFeedbackBus">-</b> / <b id="batteryPreheatFeedbackAgeMs">-</b></span></div>
-<div class="kv"><span>车辆预热状态 / 请求加热</span><span><b id="batteryPreheatUiState">-</b> / <b id="batteryPreheatUiRequestHeat">-</b></span></div>
-<div class="kv"><span>电池是否正在加热</span><span id="batteryPreheatHeatingActive">-</span></div>
+<div class="kv"><span>0x082导航预热状态 / 请求加热</span><span><b id="batteryPreheatUiState">-</b> / <b id="batteryPreheatUiRequestHeat">-</b></span></div>
+<div class="kv"><span>0x082导航预热主动加热</span><span id="batteryPreheatHeatingActive">-</span></div>
 <div class="kv"><span>导航快充 / 快充类型 / 行程规划</span><span><b id="batteryPreheatUiNavToSupercharger">-</b> / <b id="batteryPreheatUiFastChargerType">-</b> / <b id="batteryPreheatUiTripActive">-</b></span></div>
 <div class="kv"><span>0x082反馈功率 / 目标温度</span><span><b id="batteryPreheatUiPowerW">-</b> / <b id="batteryPreheatUiTargetCx100">-</b></span></div>
 <div class="kv"><span>本机发送功率 / 目标温度</span><span><b id="batteryPreheatCmdPowerW">-</b> / <b id="batteryPreheatCmdTargetCx100">-</b></span></div>
 <h3>电池温度 / 冷却</h3>
 <div class="kv"><span>电池温度 最低/平均/最高</span><span><b id="bmsTempMinCx100">-</b> / <b id="bmsTempAvgCx100">-</b> / <b id="bmsTempMaxCx100">-</b></span></div>
 <div class="kv"><span>电池温度更新时间</span><span id="bmsTempDecodedAgeMs">-</span></div>
+<div class="kv"><span>BMS热管理0x312 / 来源 / 更新时间</span><span><b id="batteryPreheatBms312Seen">-</b> / <b id="batteryPreheatBms312Bus">-</b> / <b id="batteryPreheatBms312AgeMs">-</b></span></div>
+<div class="kv"><span>BMS目标模式0x3B2 / 来源 / 更新时间</span><span><b id="batteryPreheatBms3b2Seen">-</b> / <b id="batteryPreheatBms3b2Bus">-</b> / <b id="batteryPreheatBms3b2AgeMs">-</b></span></div>
+<div class="kv"><span>BMS实际加热判断</span><span id="batteryPreheatBmsHeatStatus">-</span></div>
 <div class="kv"><span>冷却环境数据 / 来源 / 更新时间</span><span><b id="batteryPreheatVcfrontSeen">-</b> / <b id="batteryPreheatVcfrontBus">-</b> / <b id="batteryPreheatVcfrontAgeMs">-</b></span></div>
 <div class="kv"><span>冷却液温度 电池/电驱</span><span><b id="batteryPreheatVcfrontCoolantBatInletCx100">-</b> / <b id="batteryPreheatVcfrontCoolantPtInletCx100">-</b></span></div>
 <div class="kv"><span>环境温度 当前/过滤</span><span><b id="batteryPreheatVcfrontAmbientCx100">-</b> / <b id="batteryPreheatVcfrontAmbientFilteredCx100">-</b></span></div>
@@ -301,7 +304,7 @@ stats.push("uiHandsOnReqActive","uiHandsOnReqBlocked","uiHandsOnReqSeen","uiHand
 stats.push("dasLcHandsOnReasonSeen","dasLcHandsOnReasonDlc","dasLcHandsOnReasonDecode","dasLcHandsOnReasonPrevious","dasLcHandsOnReasonLatest","dasLcHandsOnReasonFrameAgeMs","dasLcHandsOnReasonPreviousAgeMs","dasLcHandsOnReasonLatestAgeMs");
 const statIds={nagKillerMode:"nagKillerModeText"};
 stats.push("batteryPreheatCmdPowerW","batteryPreheatCmdTargetCx100");
-stats.push("batteryPreheatBlockMask","batteryPreheatChargeStatusSeen","batteryPreheatChargeStatusBus","batteryPreheatChargeStatus","batteryPreheatChargeStatusAgeMs","batteryPreheatSocSeen","batteryPreheatSocBus","batteryPreheatSocUiDeciPct","batteryPreheatBms332Seen","batteryPreheatBms332Bus","batteryPreheatBms332Mux","batteryPreheatBms332AgeMs","batteryPreheatBms332MinCx100","batteryPreheatBms332AvgCx100","batteryPreheatBms332MaxCx100","batteryPreheatVcfrontSeen","batteryPreheatVcfrontBus","batteryPreheatVcfrontAgeMs","batteryPreheatVcfrontCoolantLevel","batteryPreheatVcfrontCoolantBatInletCx100","batteryPreheatVcfrontCoolantPtInletCx100","batteryPreheatVcfrontAmbientCx100","batteryPreheatVcfrontAmbientFilteredCx100");
+stats.push("batteryPreheatBlockMask","batteryPreheatChargeStatusSeen","batteryPreheatChargeStatusBus","batteryPreheatChargeStatus","batteryPreheatChargeStatusAgeMs","batteryPreheatSocSeen","batteryPreheatSocBus","batteryPreheatSocUiDeciPct","batteryPreheatBms332Seen","batteryPreheatBms332Bus","batteryPreheatBms332Mux","batteryPreheatBms332AgeMs","batteryPreheatBms332MinCx100","batteryPreheatBms332AvgCx100","batteryPreheatBms332MaxCx100","batteryPreheatBms312Seen","batteryPreheatBms312Bus","batteryPreheatBms312AgeMs","batteryPreheatBms3b2Seen","batteryPreheatBms3b2Bus","batteryPreheatBms3b2AgeMs","batteryPreheatBmsHeatStatus","batteryPreheatVcfrontSeen","batteryPreheatVcfrontBus","batteryPreheatVcfrontAgeMs","batteryPreheatVcfrontCoolantLevel","batteryPreheatVcfrontCoolantBatInletCx100","batteryPreheatVcfrontCoolantPtInletCx100","batteryPreheatVcfrontAmbientCx100","batteryPreheatVcfrontAmbientFilteredCx100");
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
@@ -398,21 +401,22 @@ if(k==="dasLcHandsOnReasonSeen")return yesNo(v);
 if(k==="dasLcHandsOnReasonDecode")return ["已解码 / Decoded","未收到0x5D9 / No 0x5D9","DLC不足 / Bad DLC","缺DBC bit定义 / Missing bit layout","值超范围 / Invalid value"][v]||v;
 if(k==="dasLcHandsOnReasonPrevious"||k==="dasLcHandsOnReasonLatest")return dasLcHandsReason(v);
 if(k==="dasLcHandsOnReasonFrameAgeMs"||k==="dasLcHandsOnReasonPreviousAgeMs"||k==="dasLcHandsOnReasonLatestAgeMs")return Number(v)===4294967295?"-":ageMs(v);
-if(k==="batteryPreheatActive"||k==="batteryPreheatAutoOffLatched"||k==="batteryPreheatChargeDetected"||k==="batteryPreheatChargeStatusSeen"||k==="batteryPreheatSocSeen"||k==="batteryPreheatFeedbackSeen"||k==="batteryPreheatBms332Seen"||k==="batteryPreheatVcfrontSeen"||k==="bmsTempFrameSeen"||k==="bmsTempDecodedSeen")return yesNo(v);
+if(k==="batteryPreheatActive"||k==="batteryPreheatAutoOffLatched"||k==="batteryPreheatChargeDetected"||k==="batteryPreheatChargeStatusSeen"||k==="batteryPreheatSocSeen"||k==="batteryPreheatFeedbackSeen"||k==="batteryPreheatBms332Seen"||k==="batteryPreheatBms312Seen"||k==="batteryPreheatBms3b2Seen"||k==="batteryPreheatVcfrontSeen"||k==="bmsTempFrameSeen"||k==="bmsTempDecodedSeen")return yesNo(v);
 if(k==="batteryPreheatBlockMask")return preheatBlock(v);
 if(k==="batteryPreheatRunMs"||k==="batteryPreheatStableTempMs")return durMs(v);
-if(k==="batteryPreheatAgeMs"||k==="batteryPreheatFeedbackAgeMs"||k==="batteryPreheatSocAgeMs"||k==="batteryPreheatChargeStatusAgeMs"||k==="batteryPreheatBms332AgeMs"||k==="batteryPreheatVcfrontAgeMs"||k==="bmsTempDecodedAgeMs")return ageMs(v);
+if(k==="batteryPreheatAgeMs"||k==="batteryPreheatFeedbackAgeMs"||k==="batteryPreheatSocAgeMs"||k==="batteryPreheatChargeStatusAgeMs"||k==="batteryPreheatBms332AgeMs"||k==="batteryPreheatBms312AgeMs"||k==="batteryPreheatBms3b2AgeMs"||k==="batteryPreheatVcfrontAgeMs"||k==="bmsTempDecodedAgeMs")return ageMs(v);
 if(k==="batteryPreheatAutoOffReason")return ["无","平均温度到42°C","最高温到45°C","开始充电","运行15分钟","手动关闭","电量低于5%"][v]||v;
 if(k==="batteryPreheatSocUiDeciPct")return v<0?"未知":((v/10).toFixed(1)+"%");
 if(k==="batteryPreheatSocPct")return v<0?"未知":(v+"%");
-if(k==="batteryPreheatFeedbackBus"||k==="batteryPreheatChargeStatusBus"||k==="batteryPreheatSocBus"||k==="batteryPreheatBms332Bus"||k==="batteryPreheatVcfrontBus")return canBus(v);
+if(k==="batteryPreheatFeedbackBus"||k==="batteryPreheatChargeStatusBus"||k==="batteryPreheatSocBus"||k==="batteryPreheatBms332Bus"||k==="batteryPreheatBms312Bus"||k==="batteryPreheatBms3b2Bus"||k==="batteryPreheatVcfrontBus")return canBus(v);
 if(k==="batteryPreheatChargeStatus")return ["0 DISCONNECTED","1 NO_POWER","2 ABOUT_TO_CHARGE","3 CHARGING","4 CHARGE_COMPLETE","5 CHARGE_STOPPED","6 CALIBRATING"][v]||"-";
 if(k==="batteryPreheatBms332Mux")return v===0?"0 THERM":(v===1?"1 VOLT":(v===2?"2 END":"-"));
 if(k==="batteryPreheatVcfrontCoolantLevel")return v===0?"0 NOT_OK":(v===1?"1 FILLED":(v===255?"-":v));
 if(k==="batteryPreheatUiTripActive"||k==="batteryPreheatUiNavToSupercharger"||k==="batteryPreheatUiRequestHeat")return yesNo(v);
 if(k==="batteryPreheatHeatingActive")return yesNoUnknown(v);
 if(k==="batteryPreheatUiFastChargerType"){if(v===0)return "0 无";if(v===1)return "1 Low";if(v===2)return "2 V2";if(v===3)return "3 V3";if(v===4)return "4 V4";return v+" 未定义"}
-if(k==="batteryPreheatUiState")return ["空闲","主动加热","状态2","状态3"][v]||v;
+if(k==="batteryPreheatUiState")return ["0 被动加热","1 主动加热","2 被动冷却","3 主动冷却"][v]||v;
+if(k==="batteryPreheatBmsHeatStatus")return ["未收到新鲜BMS热管理帧","已收到BMS帧，缺DBC位定义，暂不判断"][v]||v;
 if(k==="batteryPreheatUiPowerW"||k==="batteryPreheatCmdPowerW")return v<=-32000?"-":(v+" W");
 if(k==="batteryPreheatUiTargetCx100"||k==="batteryPreheatCmdTargetCx100"||k==="batteryPreheatUiAmbientCx100"||k==="batteryPreheatBms332MinCx100"||k==="batteryPreheatBms332AvgCx100"||k==="batteryPreheatBms332MaxCx100"||k==="batteryPreheatVcfrontCoolantBatInletCx100"||k==="batteryPreheatVcfrontCoolantPtInletCx100"||k==="batteryPreheatVcfrontAmbientCx100"||k==="batteryPreheatVcfrontAmbientFilteredCx100"||k==="bmsTempLatest1Cx100"||k==="bmsTempLatest2Cx100"||k==="bmsTempLatest3Cx100"||k==="bmsTempMinCx100"||k==="bmsTempAvgCx100"||k==="bmsTempMaxCx100")return cx100(v);
 if(k==="batteryPreheatUiChargeTargetCx10")return v<=-32000?"-":(v/10).toFixed(1)+" ℃";
