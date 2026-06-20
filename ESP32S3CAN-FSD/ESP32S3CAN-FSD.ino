@@ -123,15 +123,36 @@ constexpr uint32_t TWAI_ALERT_MASK =
   TWAI_ALERT_TX_FAILED |
   TWAI_ALERT_RX_QUEUE_FULL |
   TWAI_ALERT_RX_FIFO_OVERRUN;
-constexpr uint32_t TWAI_TX_WAIT_MS = 5;
+constexpr uint32_t TWAI_TX_WAIT_MS = 2;
 constexpr uint32_t TWAI_RX_WAIT_MS = 1;
 constexpr uint32_t TWAI_TX_RETRY_DELAY_MS = 1;
 constexpr uint8_t TWAI_TX_RETRY_COUNT = 1;
 constexpr uint8_t TWAI_RX_SCAN_LIMIT = 8;
+constexpr uint8_t TWAI_RX_DRAIN_FRAME_LIMIT = 4;
+constexpr uint32_t TWAI_RX_DRAIN_TIME_US = 500;
 constexpr uint32_t DIAG_TX_SLOW_US = 2000;
 
 constexpr uint8_t CANB_FILTER_ALL = 0;
 constexpr uint8_t CANB_FILTER_FEATURE = 1;
+constexpr uint8_t CANB_TX_SRC_OTHER = 0;
+constexpr uint8_t CANB_TX_SRC_NAG = 1;
+constexpr uint8_t CANB_TX_SRC_BATTERY = 2;
+constexpr uint8_t CANB_TX_SRC_SERVICE = 3;
+constexpr uint8_t CANB_TX_SRC_SCROLL_GEAR = 4;
+constexpr uint8_t CANB_TX_SRC_DND = 5;
+constexpr uint8_t CANB_TX_SRC_LIGHT = 6;
+constexpr uint8_t CANB_TX_SRC_REAR_FOG = 7;
+constexpr uint8_t CANB_TX_SRC_REVERSE = 8;
+constexpr uint8_t CANB_TX_SRC_COUNT = 9;
+constexpr uint8_t CANB_TX_PRIO_HIGH = 0;
+constexpr uint8_t CANB_TX_PRIO_MED = 1;
+constexpr uint8_t CANB_TX_PRIO_LOW = 2;
+constexpr uint8_t CANB_TX_QUEUE_CAP = 16;
+constexpr uint8_t CANB_TX_SCHED_MAX_PER_LOOP = 2;
+constexpr uint16_t CANB_TX_TTL_FAST_MS = 100;
+constexpr uint16_t CANB_TX_TTL_SCROLL_MS = 150;
+constexpr uint16_t CANB_TX_TTL_DEFAULT_MS = 300;
+constexpr uint16_t CANB_TX_TTL_PREHEAT_MS = 600;
 constexpr uint8_t NAG_KILLER_MODE_B = 1;
 constexpr uint8_t NAG_KILLER_MODE_C = 2;
 constexpr uint8_t NAG_KILLER_MODE_DOC = 3;
@@ -174,7 +195,7 @@ struct RuntimeConfig {
 
   bool canbEnabled = true;
   bool canbServiceModeEnabled = false;
-  uint8_t canbFilterMode = CANB_FILTER_ALL; // 0=capture/debug all, 1=current feature IDs
+  uint8_t canbFilterMode = CANB_FILTER_FEATURE; // 0=capture/debug all, 1=current feature IDs
   bool highBeamStrobeEnabled = false; // arms double-pull flash-to-pass trigger
   bool overtakeLightAlwaysOnEnabled = false; // unconditional 0x249 flash-to-pass PULL
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
@@ -278,6 +299,25 @@ struct RuntimeStatus {
   uint32_t canbTxSlowCount = 0;
   uint32_t canbDrainMaxUs = 0;
   uint8_t canbDrainMaxFrames = 0;
+  uint8_t canbTxLoopLast = 0;
+  uint8_t canbTxLoopMax = 0;
+  uint8_t canbTxLoopMaxEver = 0;
+  uint32_t canbTxSrcOther = 0;
+  uint32_t canbTxSrcNag = 0;
+  uint32_t canbTxSrcBattery = 0;
+  uint32_t canbTxSrcService = 0;
+  uint32_t canbTxSrcScrollGear = 0;
+  uint32_t canbTxSrcDnd = 0;
+  uint32_t canbTxSrcLight = 0;
+  uint32_t canbTxSrcRearFog = 0;
+  uint32_t canbTxSrcReverse = 0;
+  uint8_t canbTxQueueDepth = 0;
+  uint8_t canbTxQueueMaxDepth = 0;
+  uint32_t canbTxSchedTx = 0;
+  uint32_t canbTxSchedDrop = 0;
+  uint32_t canbTxSchedExpired = 0;
+  uint32_t canbTxSchedFail = 0;
+  uint32_t canbTxSchedBudgetHit = 0;
   uint32_t webTaskMaxUs = 0;
   uint32_t totalHeapBytes = 0;
   uint32_t freeHeapBytes = 0;
@@ -406,6 +446,10 @@ static uint32_t diagCanbTxMaxUs = 0;
 static uint32_t diagCanbTxSlowCount = 0;
 static uint32_t diagCanbDrainMaxUs = 0;
 static uint8_t diagCanbDrainMaxFrames = 0;
+static uint8_t diagCanbTxThisLoop = 0;
+static uint8_t diagCanbTxLoopMax = 0;
+static uint8_t diagCanbTxLoopMaxEver = 0;
+static uint32_t diagCanbTxSourceCounts[CANB_TX_SRC_COUNT] = {};
 static volatile uint32_t diagWebTaskMaxUs = 0;
 static uint32_t diagPrevCan1Rx = 0;
 static uint32_t diagPrevCan1Tx = 0;
@@ -626,7 +670,9 @@ static void handleBatteryPreheatBmsDiagFrame(const can_frame& frame, uint8_t bus
 static bool readBitsLE(const can_frame& frame, uint8_t startBit, uint8_t length, uint32_t& value);
 #ifdef ENABLE_CANB_MCP2515
 static bool canbIsReady();
-static bool canb_send(const can_frame& frame);
+static bool canb_send(const can_frame& frame, uint8_t source = CANB_TX_SRC_OTHER);
+static bool canbScheduleTx(const can_frame& frame, uint8_t source, uint8_t priority,
+                           uint16_t ttlMs, bool replaceSameSourceId = false);
 #endif
 
 static bool twai_send(const can_frame& frame) {
@@ -664,17 +710,17 @@ static bool twai_send(const can_frame& frame) {
 
 static bool nagKillerSendFrame(const can_frame& frame) {
 #ifdef ENABLE_CANB_MCP2515
-  return canb_send(frame);  // T-2CAN: Nag-Killer lives on bus=2 / MCP2515 / physical CANA.
+  return canb_send(frame, CANB_TX_SRC_NAG);  // T-2CAN: Nag-Killer lives on bus=2 / MCP2515 / physical CANA.
 #else
   return twai_send(frame);
 #endif
 }
 
-static bool twai_recv(can_frame& frame) {
+static bool twai_recv(can_frame& frame, bool waitFirst) {
   twai_message_t msg;
 
   for (uint8_t i = 0; i < TWAI_RX_SCAN_LIMIT; ++i) {
-    TickType_t waitTicks = (i == 0) ? pdMS_TO_TICKS(TWAI_RX_WAIT_MS) : 0;
+    TickType_t waitTicks = (waitFirst && i == 0) ? pdMS_TO_TICKS(TWAI_RX_WAIT_MS) : 0;
     const uint32_t waitStartUs = micros();
     const esp_err_t recvResult = twai_receive(&msg, waitTicks);
     diagLoopWaitUs += micros() - waitStartUs;
@@ -958,7 +1004,7 @@ static void sendBatteryPreheatFrame(const uint8_t payload[8]) {
   f.can_dlc = 8;
   memcpy(f.data, payload, 8);
 #ifdef ENABLE_CANB_MCP2515
-  canb_send(f);
+  canbScheduleTx(f, CANB_TX_SRC_BATTERY, CANB_TX_PRIO_LOW, CANB_TX_TTL_PREHEAT_MS);
 #else
   twai_send(f);
 #endif
@@ -1906,6 +1952,24 @@ static uint32_t canbTxFailCount = 0;
 static uint32_t canbLastId = 0;
 static uint32_t canbRxOverflowCount = 0;
 
+struct CanBTxQueueItem {
+  can_frame frame{};
+  uint8_t source = CANB_TX_SRC_OTHER;
+  uint8_t priority = CANB_TX_PRIO_LOW;
+  uint16_t ttlMs = CANB_TX_TTL_DEFAULT_MS;
+  uint32_t queuedMs = 0;
+  bool used = false;
+};
+
+static CanBTxQueueItem canbTxQueue[CANB_TX_QUEUE_CAP];
+static uint8_t canbTxQueueDepth = 0;
+static uint8_t canbTxQueueMaxDepth = 0;
+static uint32_t canbTxSchedTxCount = 0;
+static uint32_t canbTxSchedDropCount = 0;
+static uint32_t canbTxSchedExpiredCount = 0;
+static uint32_t canbTxSchedFailCount = 0;
+static uint32_t canbTxSchedBudgetHitCount = 0;
+
 static bool canbIsReady() {
   return canbReady;
 }
@@ -2119,7 +2183,11 @@ constexpr uint32_t CANB_RX_DRAIN_TIME_US = 900;
 static void setupCanB();
 static bool applyCanBFilters(uint8_t mode);
 static bool canb_recv(can_frame& frame);
-static bool canb_send(const can_frame& frame);
+static bool canb_send(const can_frame& frame, uint8_t source);
+static bool canbScheduleTx(const can_frame& frame, uint8_t source, uint8_t priority,
+                           uint16_t ttlMs, bool replaceSameSourceId);
+static void serviceCanBTxScheduler();
+static bool canbIntAsserted();
 static void drainCanBWithBudget(const RuntimeConfig& cfg);
 static void updateCanBErrorStatus();
 static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg);
@@ -2224,7 +2292,13 @@ static bool canb_recv(can_frame& frame) {
   return true;
 }
 
-static bool canb_send(const can_frame& frame) {
+static bool canb_send(const can_frame& frame, uint8_t source) {
+  if (source >= CANB_TX_SRC_COUNT) source = CANB_TX_SRC_OTHER;
+  if (diagCanbTxThisLoop < UINT8_MAX) diagCanbTxThisLoop++;
+  if (diagCanbTxThisLoop > diagCanbTxLoopMax) diagCanbTxLoopMax = diagCanbTxThisLoop;
+  if (diagCanbTxThisLoop > diagCanbTxLoopMaxEver) diagCanbTxLoopMaxEver = diagCanbTxThisLoop;
+  diagCanbTxSourceCounts[source]++;
+
   if (!canbReady) return false;
   if (frame.can_dlc > 8) return false;
   const uint32_t txStartUs = micros();
@@ -2244,6 +2318,115 @@ static bool canb_send(const can_frame& frame) {
   canbTxFailCount++;
   g_status.canbTxFail = canbTxFailCount;
   return false;
+}
+
+static void canbTxSchedulerRefreshStatus() {
+  g_status.canbTxQueueDepth = canbTxQueueDepth;
+  g_status.canbTxQueueMaxDepth = canbTxQueueMaxDepth;
+  g_status.canbTxSchedTx = canbTxSchedTxCount;
+  g_status.canbTxSchedDrop = canbTxSchedDropCount;
+  g_status.canbTxSchedExpired = canbTxSchedExpiredCount;
+  g_status.canbTxSchedFail = canbTxSchedFailCount;
+  g_status.canbTxSchedBudgetHit = canbTxSchedBudgetHitCount;
+}
+
+static void canbTxQueueRemove(uint8_t index) {
+  if (index >= CANB_TX_QUEUE_CAP || !canbTxQueue[index].used) return;
+  canbTxQueue[index].used = false;
+  if (canbTxQueueDepth > 0) canbTxQueueDepth--;
+  canbTxSchedulerRefreshStatus();
+}
+
+static bool canbScheduleTx(const can_frame& frame, uint8_t source, uint8_t priority,
+                           uint16_t ttlMs, bool replaceSameSourceId) {
+  if (!canbReady || frame.can_dlc > 8) return canb_send(frame, source);
+  if (source >= CANB_TX_SRC_COUNT) source = CANB_TX_SRC_OTHER;
+  if (priority > CANB_TX_PRIO_LOW) priority = CANB_TX_PRIO_LOW;
+
+  const uint32_t now = millis();
+  const uint32_t canId = frame.can_id & CAN_SFF_MASK;
+  if (replaceSameSourceId) {
+    for (uint8_t i = 0; i < CANB_TX_QUEUE_CAP; ++i) {
+      CanBTxQueueItem& item = canbTxQueue[i];
+      if (!item.used) continue;
+      if (item.source == source && ((item.frame.can_id & CAN_SFF_MASK) == canId)) {
+        item.frame = frame;
+        item.priority = priority;
+        item.ttlMs = ttlMs;
+        item.queuedMs = now;
+        canbTxSchedulerRefreshStatus();
+        return true;
+      }
+    }
+  }
+
+  for (uint8_t i = 0; i < CANB_TX_QUEUE_CAP; ++i) {
+    CanBTxQueueItem& item = canbTxQueue[i];
+    if (item.used) continue;
+    item.frame = frame;
+    item.source = source;
+    item.priority = priority;
+    item.ttlMs = ttlMs;
+    item.queuedMs = now;
+    item.used = true;
+    if (canbTxQueueDepth < UINT8_MAX) canbTxQueueDepth++;
+    if (canbTxQueueDepth > canbTxQueueMaxDepth) canbTxQueueMaxDepth = canbTxQueueDepth;
+    canbTxSchedulerRefreshStatus();
+    return true;
+  }
+
+  canbTxSchedDropCount++;
+  canbTxSchedulerRefreshStatus();
+  return false;
+}
+
+static int8_t canbTxSchedulerBestIndex(uint32_t now) {
+  int8_t best = -1;
+  uint8_t bestPriority = UINT8_MAX;
+  uint32_t bestQueuedMs = 0;
+  for (uint8_t i = 0; i < CANB_TX_QUEUE_CAP; ++i) {
+    CanBTxQueueItem& item = canbTxQueue[i];
+    if (!item.used) continue;
+    if (item.ttlMs != 0 && (now - item.queuedMs) > item.ttlMs) {
+      canbTxSchedExpiredCount++;
+      canbTxQueueRemove(i);
+      continue;
+    }
+    if (best < 0 || item.priority < bestPriority ||
+        (item.priority == bestPriority && (int32_t)(item.queuedMs - bestQueuedMs) < 0)) {
+      best = static_cast<int8_t>(i);
+      bestPriority = item.priority;
+      bestQueuedMs = item.queuedMs;
+    }
+  }
+  canbTxSchedulerRefreshStatus();
+  return best;
+}
+
+static void serviceCanBTxScheduler() {
+  if (!canbReady || canbTxQueueDepth == 0) return;
+  uint8_t sentThisLoop = 0;
+  while (sentThisLoop < CANB_TX_SCHED_MAX_PER_LOOP) {
+    const int8_t index = canbTxSchedulerBestIndex(millis());
+    if (index < 0) break;
+
+    const CanBTxQueueItem item = canbTxQueue[index];
+    canbTxQueueRemove(static_cast<uint8_t>(index));
+    if (canb_send(item.frame, item.source)) {
+      canbTxSchedTxCount++;
+    } else {
+      canbTxSchedFailCount++;
+    }
+    sentThisLoop++;
+  }
+  if (canbTxQueueDepth > 0 && sentThisLoop >= CANB_TX_SCHED_MAX_PER_LOOP) {
+    canbTxSchedBudgetHitCount++;
+  }
+  canbTxSchedulerRefreshStatus();
+}
+
+static bool canbIntAsserted() {
+  return canbReady && digitalRead(MCP2515_INT) == LOW;
 }
 
 static void updateCanBErrorStatus() {
@@ -2385,7 +2568,8 @@ static void serviceScrollGearShift(const RuntimeConfig& cfg) {
   }
   if (!canbReady || !cfg.canbEnabled || !cfg.scrollGearInjectEnabled ||
       !scrollGearSafetyOk(scrollGearTargetGear, cfg)) {
-    canb_send(rightStalkFrame(RIGHT_STALK_IDLE));
+    canbScheduleTx(rightStalkFrame(RIGHT_STALK_IDLE), CANB_TX_SRC_SCROLL_GEAR,
+                   CANB_TX_PRIO_LOW, CANB_TX_TTL_SCROLL_MS);
     scrollGearShiftActive = false;
     scrollGearCooldownUntilMs = millis() + SCROLL_GEAR_COOLDOWN_MS;
     g_status.scrollGearInjectActive = 0;
@@ -2415,7 +2599,8 @@ static void serviceScrollGearShift(const RuntimeConfig& cfg) {
     return;
   }
 
-  canb_send(rightStalkFrame(status));
+  canbScheduleTx(rightStalkFrame(status), CANB_TX_SRC_SCROLL_GEAR,
+                 CANB_TX_PRIO_LOW, CANB_TX_TTL_SCROLL_MS);
   scrollGearNextTxMs = now + SCROLL_GEAR_FRAME_INTERVAL_MS;
 }
 
@@ -2493,7 +2678,7 @@ static bool sendDndVolumeFrame(uint8_t cmd) {
   // while data[2] changes, so only change the left-scroll tick byte here.
   f.data[2] = cmd;
 
-  if (!canb_send(f)) {
+  if (!canb_send(f, CANB_TX_SRC_DND)) {
     g_status.dndBlocked = DND_BLOCK_CANB;
     return false;
   }
@@ -2647,7 +2832,7 @@ static can_frame rearFogFrame(bool fogOn) {
 
 static void stopHighBeamStrobe(bool sendIdle) {
   if (sendIdle && canbReady) {
-    canb_send(highBeamFrame(STALK_STATUS_IDLE));
+    canb_send(highBeamFrame(STALK_STATUS_IDLE), CANB_TX_SRC_LIGHT);
   }
   highBeamStrobeActive = false;
   highBeamStrobeOutputOn = false;
@@ -2666,7 +2851,8 @@ static void startHighBeamStrobe() {
 
 static void stopRearFogBrakeStrobe(bool sendOff) {
   if (sendOff && canbReady) {
-    canb_send(rearFogFrame(false));
+    canbScheduleTx(rearFogFrame(false), CANB_TX_SRC_REAR_FOG,
+                   CANB_TX_PRIO_LOW, CANB_TX_TTL_DEFAULT_MS);
   }
   rearFogBrakeStrobeActive = false;
   rearFogBrakeStrobeManualTrigger = false;
@@ -2688,12 +2874,16 @@ static void startRearFogBrakeStrobe(uint8_t pulses, uint8_t priority, bool manua
 
 static void stopReverseStrobe(bool sendOff) {
   if (sendOff && canbReady) {
-    canb_send(vcleftHazardFrame(false));  // release any in-progress hazard button press
+    canbScheduleTx(vcleftHazardFrame(false), CANB_TX_SRC_REVERSE,
+                   CANB_TX_PRIO_LOW, CANB_TX_TTL_DEFAULT_MS);  // release any in-progress hazard button press
     if (reverseHazardLatchedOn) {
-      canb_send(vcleftHazardFrame(true));   // toggle hazards back off if this feature turned them on
-      canb_send(vcleftHazardFrame(false));  // release the OFF click
+      canbScheduleTx(vcleftHazardFrame(true), CANB_TX_SRC_REVERSE,
+                     CANB_TX_PRIO_LOW, CANB_TX_TTL_DEFAULT_MS);   // toggle hazards back off if this feature turned them on
+      canbScheduleTx(vcleftHazardFrame(false), CANB_TX_SRC_REVERSE,
+                     CANB_TX_PRIO_LOW, CANB_TX_TTL_DEFAULT_MS);  // release the OFF click
     }
-    canb_send(rearFogFrame(false));
+    canbScheduleTx(rearFogFrame(false), CANB_TX_SRC_REVERSE,
+                   CANB_TX_PRIO_LOW, CANB_TX_TTL_DEFAULT_MS);
   }
   reverseStrobeActive = false;
   reverseStrobePhase = 0;
@@ -2707,7 +2897,7 @@ static void startReverseStrobe() {
   reverseStrobeActive = true;
   reverseStrobePhase = 1;                                 // ON-press
   reverseStrobePhaseEnd = millis() + REVERSE_HAZARD_CLICK_MS;
-  canb_send(vcleftHazardFrame(true));                     // single press edge -> hazards ON
+  canb_send(vcleftHazardFrame(true), CANB_TX_SRC_REVERSE);  // single press edge -> hazards ON
   reverseHazardLatchedOn = true;
   startRearFogBrakeStrobe(REVERSE_STROBE_PULSES, REAR_FOG_PRIORITY_REVERSE, true);
 }
@@ -2895,7 +3085,8 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
       (now - highBeamStrobeLastToggleMs) < HIGH_BEAM_STROBE_INTERVAL_MS) {
     if (highBeamStrobeLastSendMs == 0 ||
         (now - highBeamStrobeLastSendMs) >= HIGH_BEAM_STROBE_RESEND_MS) {
-      canb_send(highBeamFrame(highBeamStrobeOutputOn ? STALK_STATUS_PULL : STALK_STATUS_IDLE));
+      canb_send(highBeamFrame(highBeamStrobeOutputOn ? STALK_STATUS_PULL : STALK_STATUS_IDLE),
+                CANB_TX_SRC_LIGHT);
       highBeamStrobeLastSendMs = now;
     }
     return;
@@ -2903,10 +3094,10 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
   highBeamStrobeLastToggleMs = now;
 
   if (!highBeamStrobeOutputOn) {
-    canb_send(highBeamFrame(STALK_STATUS_PULL));
+    canb_send(highBeamFrame(STALK_STATUS_PULL), CANB_TX_SRC_LIGHT);
     highBeamStrobeOutputOn = true;
   } else {
-    canb_send(highBeamFrame(STALK_STATUS_IDLE));
+    canb_send(highBeamFrame(STALK_STATUS_IDLE), CANB_TX_SRC_LIGHT);
     highBeamStrobeOutputOn = false;
     if (highBeamStrobePulsesRemaining > 0) highBeamStrobePulsesRemaining--;
     if (highBeamStrobePulsesRemaining == 0) {
@@ -2919,7 +3110,7 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
 
 static void stopOvertakeLightForce(const RuntimeConfig& cfg, bool sendIdle) {
   if (sendIdle && cfg.canbEnabled && canbReady) {
-    canb_send(highBeamFrame(STALK_STATUS_IDLE));
+    canb_send(highBeamFrame(STALK_STATUS_IDLE), CANB_TX_SRC_LIGHT);
   }
   overtakeLightForceOutputOn = false;
   overtakeLightForceLastTxMs = 0;
@@ -2955,7 +3146,8 @@ static void serviceOvertakeLightAlwaysOn(const RuntimeConfig& cfg) {
     return;
   }
 
-  if (canb_send(highBeamFrame(STALK_STATUS_PULL))) {
+  if (canbScheduleTx(highBeamFrame(STALK_STATUS_PULL), CANB_TX_SRC_LIGHT,
+                     CANB_TX_PRIO_MED, CANB_TX_TTL_FAST_MS, true)) {
     overtakeLightForceOutputOn = true;
     overtakeLightForceLastTxMs = now;
   }
@@ -2981,12 +3173,12 @@ static void serviceReverseStrobe(const RuntimeConfig& cfg) {
 
   switch (reverseStrobePhase) {
     case 1:  // ON-press done -> release button; hold while the car flashes
-      canb_send(vcleftHazardFrame(false));
+      canb_send(vcleftHazardFrame(false), CANB_TX_SRC_REVERSE);
       reverseStrobePhase = 2;
       reverseStrobePhaseEnd = now + REVERSE_HAZARD_ON_MS;
       break;
     case 2:  // hold done -> press again to toggle hazards back off
-      canb_send(vcleftHazardFrame(true));
+      canb_send(vcleftHazardFrame(true), CANB_TX_SRC_REVERSE);
       reverseHazardLatchedOn = false;
       reverseStrobePhase = 3;
       reverseStrobePhaseEnd = now + REVERSE_HAZARD_CLICK_MS;
@@ -3022,10 +3214,10 @@ static void serviceRearFogBrakeStrobe(const RuntimeConfig& cfg) {
   rearFogBrakeStrobeLastToggleMs = now;
 
   if (!rearFogBrakeStrobeOutputOn) {
-    canb_send(rearFogFrame(true));
+    canb_send(rearFogFrame(true), CANB_TX_SRC_REAR_FOG);
     rearFogBrakeStrobeOutputOn = true;
   } else {
-    canb_send(rearFogFrame(false));
+    canb_send(rearFogFrame(false), CANB_TX_SRC_REAR_FOG);
     rearFogBrakeStrobeOutputOn = false;
     if (rearFogBrakeStrobePulsesRemaining > 0) rearFogBrakeStrobePulsesRemaining--;
     if (rearFogBrakeStrobePulsesRemaining == 0) {
@@ -3339,7 +3531,7 @@ static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg) {
 static void drainCanBWithBudget(const RuntimeConfig& cfg) {
   if (!canbReady) return;
 
-  const bool intAsserted = (digitalRead(MCP2515_INT) == LOW);
+  const bool intAsserted = canbIntAsserted();
 #ifdef ENABLE_LIGHT_WEBUI
   const bool recorderActive = recActive;
 #else
@@ -3383,7 +3575,7 @@ static void serviceCanBScheduledTx() {
   f.can_id = 0x339;
   f.can_dlc = 8;
   f.data[5] = canbServiceBurstByte5;
-  canb_send(f);
+  canbScheduleTx(f, CANB_TX_SRC_SERVICE, CANB_TX_PRIO_LOW, CANB_TX_TTL_FAST_MS);
   canbServiceBurstRemaining--;
 }
 
@@ -3658,7 +3850,7 @@ static void handleStatus() {
   }
 
   String j;
-  j.reserve(9800);
+  j.reserve(10800);
   j += '{';
   j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
@@ -3751,6 +3943,25 @@ static void handleStatus() {
   j += ",\"canbTxSlowCount\":";      j += s.canbTxSlowCount;
   j += ",\"canbDrainMaxUs\":";       j += s.canbDrainMaxUs;
   j += ",\"canbDrainMaxFrames\":";   j += s.canbDrainMaxFrames;
+  j += ",\"canbTxLoopLast\":";       j += s.canbTxLoopLast;
+  j += ",\"canbTxLoopMax\":";        j += s.canbTxLoopMax;
+  j += ",\"canbTxLoopMaxEver\":";    j += s.canbTxLoopMaxEver;
+  j += ",\"canbTxSrcOther\":";       j += s.canbTxSrcOther;
+  j += ",\"canbTxSrcNag\":";         j += s.canbTxSrcNag;
+  j += ",\"canbTxSrcBattery\":";     j += s.canbTxSrcBattery;
+  j += ",\"canbTxSrcService\":";     j += s.canbTxSrcService;
+  j += ",\"canbTxSrcScrollGear\":";  j += s.canbTxSrcScrollGear;
+  j += ",\"canbTxSrcDnd\":";         j += s.canbTxSrcDnd;
+  j += ",\"canbTxSrcLight\":";       j += s.canbTxSrcLight;
+  j += ",\"canbTxSrcRearFog\":";     j += s.canbTxSrcRearFog;
+  j += ",\"canbTxSrcReverse\":";     j += s.canbTxSrcReverse;
+  j += ",\"canbTxQueueDepth\":";     j += s.canbTxQueueDepth;
+  j += ",\"canbTxQueueMaxDepth\":";  j += s.canbTxQueueMaxDepth;
+  j += ",\"canbTxSchedTx\":";        j += s.canbTxSchedTx;
+  j += ",\"canbTxSchedDrop\":";      j += s.canbTxSchedDrop;
+  j += ",\"canbTxSchedExpired\":";   j += s.canbTxSchedExpired;
+  j += ",\"canbTxSchedFail\":";      j += s.canbTxSchedFail;
+  j += ",\"canbTxSchedBudgetHit\":"; j += s.canbTxSchedBudgetHit;
   j += ",\"webTaskMaxUs\":";         j += s.webTaskMaxUs;
   j += ",\"totalHeapBytes\":";       j += s.totalHeapBytes;
   j += ",\"freeHeapBytes\":";        j += s.freeHeapBytes;
@@ -4356,6 +4567,17 @@ static void updateRuntimeDiagnostics(uint32_t loopElapsedUs) {
   g_status.canbTxSlowCount = diagCanbTxSlowCount;
   g_status.canbDrainMaxUs = diagCanbDrainMaxUs;
   g_status.canbDrainMaxFrames = diagCanbDrainMaxFrames;
+  g_status.canbTxLoopMax = diagCanbTxLoopMax;
+  g_status.canbTxLoopMaxEver = diagCanbTxLoopMaxEver;
+  g_status.canbTxSrcOther = diagCanbTxSourceCounts[CANB_TX_SRC_OTHER];
+  g_status.canbTxSrcNag = diagCanbTxSourceCounts[CANB_TX_SRC_NAG];
+  g_status.canbTxSrcBattery = diagCanbTxSourceCounts[CANB_TX_SRC_BATTERY];
+  g_status.canbTxSrcService = diagCanbTxSourceCounts[CANB_TX_SRC_SERVICE];
+  g_status.canbTxSrcScrollGear = diagCanbTxSourceCounts[CANB_TX_SRC_SCROLL_GEAR];
+  g_status.canbTxSrcDnd = diagCanbTxSourceCounts[CANB_TX_SRC_DND];
+  g_status.canbTxSrcLight = diagCanbTxSourceCounts[CANB_TX_SRC_LIGHT];
+  g_status.canbTxSrcRearFog = diagCanbTxSourceCounts[CANB_TX_SRC_REAR_FOG];
+  g_status.canbTxSrcReverse = diagCanbTxSourceCounts[CANB_TX_SRC_REVERSE];
 
 #ifdef ENABLE_LIGHT_WEBUI
   g_status.webTaskMaxUs = diagWebTaskMaxUs;
@@ -4397,6 +4619,25 @@ static void updateRuntimeDiagnostics(uint32_t loopElapsedUs) {
   diagCanbTxSlowCount = 0;
   diagCanbDrainMaxUs = 0;
   diagCanbDrainMaxFrames = 0;
+  diagCanbTxLoopMax = 0;
+}
+
+static void handleTwaiFrame(can_frame& frame, const RuntimeConfig& cfg) {
+  recordCanFrame(frame, 'R', 1);
+  handleBatteryTempDiagFrame(frame, 1);
+  handleBatteryPreheatBmsDiagFrame(frame, 1);
+  handleBatteryPreheatFeedbackFrame(frame, 1);
+  speedLimitMonitor.update(frame);
+  handleNagKillerContextFrame(frame, cfg);
+  handleDasCarLogFrame(frame);
+#ifndef ENABLE_CANB_MCP2515
+  handleNagKillerTargetFrame(frame, cfg);
+#endif
+#ifdef ENABLE_CANB_MCP2515
+  handleDndHandsOnFrame(frame);
+#endif
+  handler.refreshUnifiedSpeedCompensation(cfg);
+  handler.handelMessage(frame, cfg);
 }
 
 void setup() {
@@ -4435,6 +4676,7 @@ void setup() {
 
 void loop() {
   const uint32_t loopStartUs = micros();
+  diagCanbTxThisLoop = 0;
   if (diagLoopLastStartUs != 0) {
     const uint32_t periodUs = loopStartUs - diagLoopLastStartUs;
     if (periodUs > diagLoopPeriodMaxUs) diagLoopPeriodMaxUs = periodUs;
@@ -4445,28 +4687,31 @@ void loop() {
 
   RuntimeConfig cfg = configSnapshot();
 
-  can_frame frame;
-  if (twai_recv(frame)) {
-    recordCanFrame(frame, 'R', 1);
-    handleBatteryTempDiagFrame(frame, 1);
-    handleBatteryPreheatBmsDiagFrame(frame, 1);
-    handleBatteryPreheatFeedbackFrame(frame, 1);
-    speedLimitMonitor.update(frame);
-    handleNagKillerContextFrame(frame, cfg);
-    handleDasCarLogFrame(frame);
-#ifndef ENABLE_CANB_MCP2515
-    handleNagKillerTargetFrame(frame, cfg);
-#endif
 #ifdef ENABLE_CANB_MCP2515
-    handleDndHandsOnFrame(frame);
+  bool canbDrainedThisLoop = false;
+  if (cfg.canbEnabled && canbIntAsserted()) {
+    drainCanBWithBudget(cfg);
+    canbDrainedThisLoop = true;
+  }
 #endif
-    handler.refreshUnifiedSpeedCompensation(cfg);
-    handler.handelMessage(frame, cfg);
+
+  can_frame frame;
+  if (twai_recv(frame, true)) {
+    handleTwaiFrame(frame, cfg);
+
+    const uint32_t twaiDrainStartUs = micros();
+    uint8_t twaiDrainedFrames = 1;
+    while (twaiDrainedFrames < TWAI_RX_DRAIN_FRAME_LIMIT &&
+           (micros() - twaiDrainStartUs) < TWAI_RX_DRAIN_TIME_US) {
+      if (!twai_recv(frame, false)) break;
+      handleTwaiFrame(frame, cfg);
+      twaiDrainedFrames++;
+    }
   }
 
 #ifdef ENABLE_CANB_MCP2515
   if (cfg.canbEnabled) {
-    drainCanBWithBudget(cfg);
+    if (!canbDrainedThisLoop) drainCanBWithBudget(cfg);
     serviceCanBScheduledTx();
   }
   serviceHighBeamStrobe(cfg);
@@ -4481,6 +4726,11 @@ void loop() {
 
   serviceBatteryPreheat(cfg);
 
+#ifdef ENABLE_CANB_MCP2515
+  if (cfg.canbEnabled) serviceCanBTxScheduler();
+#endif
+
+  g_status.canbTxLoopLast = diagCanbTxThisLoop;
   updateRuntimeDiagnostics(micros() - loopStartUs);
 }
 

@@ -183,6 +183,11 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>MCP2515 RX最大间隔 / TX最大 us</span><span><b id="canbRxGapMaxUs">-</b> / <b id="canbTxMaxUs">-</b></span></div>
 <div class="kv"><span>MCP2515 TX慢 / drain最大</span><span><b id="canbTxSlowCount">-</b> / <b id="canbDrainMaxUs">-</b></span></div>
 <div class="kv"><span>MCP2515 drain最大帧数</span><span id="canbDrainMaxFrames">-</span></div>
+<div class="kv"><span>MCP2515 TX调用每轮 上次/窗口最大/历史最大</span><span><b id="canbTxLoopLast">-</b> / <b id="canbTxLoopMax">-</b> / <b id="canbTxLoopMaxEver">-</b></span></div>
+<div class="kv"><span>MCP2515 TX调用来源 NAG/预热/灯光</span><span><b id="canbTxSrcNag">-</b> / <b id="canbTxSrcBattery">-</b> / <b id="canbTxSrcLight">-</b></span></div>
+<div class="kv"><span>MCP2515 TX调用来源 滚轮/换挡/后雾/倒挡/0x339/其他</span><span><b id="canbTxSrcDnd">-</b> / <b id="canbTxSrcScrollGear">-</b> / <b id="canbTxSrcRearFog">-</b> / <b id="canbTxSrcReverse">-</b> / <b id="canbTxSrcService">-</b> / <b id="canbTxSrcOther">-</b></span></div>
+<div class="kv"><span>MCP2515 TX队列 当前/最大</span><span><b id="canbTxQueueDepth">-</b> / <b id="canbTxQueueMaxDepth">-</b></span></div>
+<div class="kv"><span>MCP2515 TX调度 发出/丢弃/过期/失败/触顶</span><span><b id="canbTxSchedTx">-</b> / <b id="canbTxSchedDrop">-</b> / <b id="canbTxSchedExpired">-</b> / <b id="canbTxSchedFail">-</b> / <b id="canbTxSchedBudgetHit">-</b></span></div>
 <div class="kv"><span>MCP2515 last ID</span><span id="canbLastId">-</span></div>
 <div class="kv"><span>MCP2515 EFLG / RX overflow</span><span><b id="canbErrorFlags">-</b> / <b id="canbRxOverflowCount">-</b></span></div>
 </div>
@@ -423,6 +428,10 @@ if(val("canbDrainMaxFrames")>=24)add(1,"MCP2515单轮drain达到活动预算");
 if(val("canbTxMaxUs")>5000)add(2,"bus=2 TX耗时超过5ms");
 else if(val("canbTxMaxUs")>2000||val("canbTxSlowCount")>0)add(1,"bus=2 TX耗时超过2ms");
 if(val("canbTxFailRate")>0)add(1,"bus=2发送失败增加");
+if(inc("canbTxSchedDrop")>0)add(2,"MCP2515 TX调度队列丢弃增加");
+if(inc("canbTxSchedExpired")>0)add(1,"MCP2515 TX调度队列过期增加");
+if(inc("canbTxSchedFail")>0)add(1,"MCP2515 TX调度发送失败增加");
+if(inc("canbTxSchedBudgetHit")>0)add(1,"MCP2515 TX调度单轮预算触顶");
 items.sort((a,b)=>b.sev-a.sev);
 const level=items.length?items[0].sev:0;
 const levelText=["正常","警告","严重"][level];
