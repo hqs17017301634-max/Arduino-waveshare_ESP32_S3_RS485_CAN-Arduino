@@ -15,7 +15,7 @@
 `T-2CAN-WEB` is the LILYGO T-2CAN branch of this firmware. It keeps the Arduino / PlatformIO build and a bounded CAN fast path while adding:
 
 - HW3 FSD activation and speed-limit offset on the primary TWAI bus.
-- A second MCP2515 CAN bus for body/lighting/preheat features.
+- A second MCP2515 CAN bus for PT-CAN torque targets or BODY-CAN body/lighting/preheat features, depending on X179 wiring.
 - A lightweight SoftAP WebUI for runtime switches, status, and PSRAM-based CSV capture.
 
 This README describes the current `T-2CAN-WEB` branch only. Older branch-generic notes were intentionally removed to avoid mixing incompatible wiring and build instructions.
@@ -35,9 +35,19 @@ LILYGO's physical connector names are easy to confuse with older project text. I
 | Firmware bus | Controller | Official LILYGO physical port | Pins | Role |
 |---|---|---|---|---|
 | `bus=1` | ESP32-S3 native TWAI | physical `CANB` | TX `GPIO7`, RX `GPIO6` | Primary FSD activation and speed-control bus |
-| `bus=2` | MCP2515 over SPI | physical `CANA` | SCK `GPIO12`, MOSI `GPIO11`, MISO `GPIO13`, CS `GPIO10`, RST `GPIO9`, INT `GPIO8`, 16 MHz crystal | Auxiliary body/lighting/preheat/recorder bus |
+| `bus=2` | MCP2515 over SPI | physical `CANA` | SCK `GPIO12`, MOSI `GPIO11`, MISO `GPIO13`, CS `GPIO10`, RST `GPIO9`, INT `GPIO8`, 16 MHz crystal | Auxiliary feature bus; vehicle network depends on X179 wiring |
 
 Important: official LILYGO T-2CAN V1.0 names physical `CANA` as MCP2515/SPI and physical `CANB` as native TWAI. This README uses the official physical names plus the firmware `bus=1` / `bus=2` labels.
+
+Vehicle-side CAN binding must be documented by the CAN ID/function, not only by the firmware controller name:
+
+| Firmware bus | Vehicle network where the function takes effect | X179 pins | CAN IDs / functions |
+|---|---|---|---|
+| `bus=1` / TWAI | CH CAN | PIN `13 / 14` | All CAN1 functions |
+| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer torque targets: `0x052`, `0x370` |
+| `bus=2` / MCP2515 | BODY CAN | PIN `9 / 10` | Scroll/stalk/light/preheat/service functions: `0x3C2`, `0x229`, `0x249`, `0x273`, `0x082`, `0x339` |
+
+`bus=2` is one MCP2515 physical channel. It can be wired to PT CAN or BODY CAN for a test/install, but one MCP2515 channel cannot be on both vehicle networks at the same time.
 
 ### Architecture
 
@@ -45,7 +55,7 @@ Important: official LILYGO T-2CAN V1.0 names physical `CANA` as MCP2515/SPI and 
 |---|---|---|
 | Main loop | Arduino `loop()` | Services TWAI alerts, handles one primary TWAI frame, drains MCP2515 with a bounded budget, and advances non-blocking feature state machines. |
 | Primary CAN | `bus=1` / TWAI / physical CANB | Handles FSD activation, speed profile, speed offset, brake/gear context, and TWAI recovery. |
-| Secondary CAN | `bus=2` / MCP2515 / physical CANA | Handles body/lighting/preheat/service-mode features and capture context. |
+| Secondary CAN | `bus=2` / MCP2515 / physical CANA | Handles PT torque targets or BODY body/lighting/preheat/service-mode features according to X179 wiring. |
 | WebUI | Low-priority FreeRTOS task on core 0 | Serves the SoftAP page, reads cached status, updates runtime config, and never runs inside the CAN fast path. |
 | Recorder | PSRAM buffer | Stores binary CAN frames first; CSV is formatted only during HTTP download after recording stops. |
 
@@ -277,7 +287,7 @@ pio run -e lilygo_t2can_arduino_webui -t upload --upload-port COM23
 `T-2CAN-WEB` 是面向 LILYGO T-2CAN 的分支。它保持 Arduino / PlatformIO 框架和有预算限制的 CAN 快速处理路径，同时加入：
 
 - 主 TWAI 总线上的 HW3 FSD 激活与限速偏移。
-- 第二路 MCP2515 CAN，用于车身、灯光、预热等辅助功能。
+- 第二路 MCP2515 CAN，按 X179 接线用于 PT CAN 扭矩目标帧，或 BODY CAN 车身、灯光、预热等功能。
 - 轻量 SoftAP WebUI，用于运行期开关、状态查看和基于 PSRAM 的 CSV 抓包。
 
 本 README 只描述当前 `T-2CAN-WEB` 分支。旧的通用分支说明已经从本分支 README 中删除，避免混用错误接线和编译命令。
@@ -297,9 +307,19 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 | 固件 bus | 控制器 | LILYGO 官方物理端子 | 引脚 | 职责 |
 |---|---|---|---|---|
 | `bus=1` | ESP32-S3 原生 TWAI | 物理 `CANB` | TX `GPIO7`、RX `GPIO6` | 主 FSD 激活与限速控制总线 |
-| `bus=2` | MCP2515 SPI | 物理 `CANA` | SCK `GPIO12`、MOSI `GPIO11`、MISO `GPIO13`、CS `GPIO10`、RST `GPIO9`、INT `GPIO8`、16 MHz 晶振 | 辅助车身、灯光、预热和抓包总线 |
+| `bus=2` | MCP2515 SPI | 物理 `CANA` | SCK `GPIO12`、MOSI `GPIO11`、MISO `GPIO13`、CS `GPIO10`、RST `GPIO9`、INT `GPIO8`、16 MHz 晶振 | 辅助功能总线，实际车辆网络取决于 X179 接线 |
 
 重点：LILYGO T-2CAN V1.0 官方命名里，物理 `CANA` 是 MCP2515/SPI，物理 `CANB` 是原生 TWAI。本 README 同时写明固件 `bus=1` / `bus=2` 和官方物理端子名。
+
+车辆端 CAN 绑定必须按 CAN ID / 功能记录，不能只按固件控制器名记录：
+
+| 固件通道 | 功能实际生效的车辆网络 | X179 针脚 | CAN ID / 功能 |
+|---|---|---|---|
+| `bus=1` / TWAI | CH CAN | PIN `13 / 14` | CAN1 所有功能 |
+| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer 扭矩目标帧：`0x052`、`0x370` |
+| `bus=2` / MCP2515 | BODY CAN | PIN `9 / 10` | 滚轮、拨杆、灯光、电池预热、维修模式：`0x3C2`、`0x229`、`0x249`、`0x273`、`0x082`、`0x339` |
+
+`bus=2` 是一路 MCP2515 物理 CAN。它可以按测试/安装需要接到 PT CAN 或 BODY CAN，但一路 MCP2515 不能同时接在两个车辆网络上。
 
 ### 架构
 
@@ -307,7 +327,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 |---|---|---|
 | 主循环 | Arduino `loop()` | 处理 TWAI alert、处理一个主 TWAI 帧、按预算读取 MCP2515，并推进非阻塞功能状态机。 |
 | 主 CAN | `bus=1` / TWAI / 物理 CANB | FSD 激活、速度档、限速偏移、刹车/档位上下文和 TWAI 恢复。 |
-| 第二路 CAN | `bus=2` / MCP2515 / 物理 CANA | 车身、灯光、预热、Service Mode 和抓包上下文。 |
+| 第二路 CAN | `bus=2` / MCP2515 / 物理 CANA | 按 X179 接线处理 PT 扭矩目标帧，或 BODY 车身、灯光、预热、Service Mode 和抓包上下文。 |
 | WebUI | core 0 低优先级 FreeRTOS 任务 | 提供 SoftAP 页面，只读缓存状态和更新运行期配置，不进入 CAN 快路径。 |
 | 抓包 | PSRAM 缓冲 | 先保存二进制 CAN 帧，停止抓包后下载时才格式化 CSV。 |
 

@@ -870,7 +870,7 @@ static inline bool isRelevantCanId(uint32_t canId) {
 // Battery-preheat 0x082 UI_tripPlanning. This is the fixed payload proven on
 // the vehicle; the old dynamic-template and companion-frame replay paths were
 // removed so this switch has exactly one CAN behavior.
-static const uint8_t BATTERY_PREHEAT_ON[8] = {0xBF, 0x50, 0xA8, 0x80, 0xFF, 0x03, 0x00, 0x80};
+static const uint8_t BATTERY_PREHEAT_ON[8] = {0xAF, 0x50, 0xA8, 0x80, 0xFF, 0x03, 0x00, 0x80};
 static const uint8_t BATTERY_PREHEAT_OFF[8] = {0x01, 0x50, 0xA8, 0x80, 0xFF, 0x03, 0x00, 0x80};
 constexpr uint32_t BATTERY_PREHEAT_PERIOD_MS = 500UL;
 constexpr int BATTERY_PREHEAT_TARGET_CX100 = 4200;
