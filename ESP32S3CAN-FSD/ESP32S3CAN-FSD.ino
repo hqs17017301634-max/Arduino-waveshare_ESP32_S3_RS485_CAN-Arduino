@@ -2135,7 +2135,9 @@ HW3Handler handler;
 // ============================================================================
 #ifdef ENABLE_CANB_MCP2515
 
-static MCP2515 canb(MCP2515_CS);
+// Pass the configured SPI instance explicitly so the MCP2515 constructor does
+// not call a default SPI.begin() before setupCanB() applies the LILYGO pins.
+static MCP2515 canb(MCP2515_CS, 10000000, &SPI);
 static bool canbReady = false;
 static uint8_t canbHardwareFilterMode = CANB_FILTER_ALL;
 static uint32_t canbRxCount = 0;
