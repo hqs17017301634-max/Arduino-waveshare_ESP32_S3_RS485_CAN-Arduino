@@ -66,6 +66,15 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 </div>
 
 <div class="card">
+<h2>Telemetry</h2>
+<label>禁用Telemetry 版本1<input type="checkbox" id="disableTelemetryV1Enabled"></label>
+<label>禁用Telemetry 版本2<input type="checkbox" id="disableTelemetryV2Enabled"></label>
+<p class="hint">两个版本互斥。版本1：CH|VEH 和 CH|PARTY/PT 都归到 CH。版本2：CH|VEH 归到 VEH，CH|PARTY/PT 仍归到 CH。只复制实时帧并清零目标位；0x389 会更新 counter/checksum。</p>
+<div class="kv"><span>Telemetry TX / fail</span><span><b id="disableTelemetryTxCount">-</b> / <b id="disableTelemetryTxFail">-</b></span></div>
+<div class="kv"><span>最近ID / 总线 / 距今</span><span><b id="disableTelemetryLastId">-</b> / <b id="disableTelemetryLastBus">-</b> / <b id="disableTelemetryLastTxAgeMs">-</b></span></div>
+</div>
+
+<div class="card">
 <h2>灯光 / 车身</h2>
 <label>高光爆闪启用<input type="checkbox" id="highBeamStrobeEnabled"></label>
 <p class="hint">bus=2/MCP2515/物理CANA，0x249，1秒内下拉两次触发 8 次，45ms ON / 45ms OFF，优先级最高，结束强制 idle。</p>
@@ -80,29 +89,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="card">
 <h2>免打扰</h2>
 <label>持续滚轮免打扰<input type="checkbox" id="dndEnabled"></label>
-<label>Nag-Killer联动滚轮免打扰<input type="checkbox" id="nagKillerDndEnabled"></label>
-<p class="hint">持续滚轮：FSD/AP 激活后随机 1-5 秒自动音量加减恢复。Nag-Killer联动：识别 0x399 hands-on state 2..6 或 9..10 后触发 2 轮；回到 0/1 会停止待触发动作，需稳定离开约2秒后才允许再次触发。两者都复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 100ms，默认关闭。</p>
-</div>
-
-<div class="card">
-<h2>Nag-Killer 扭矩</h2>
-<label>Nag-Killer扭矩总开关<input type="checkbox" id="nagKillerEnabled"></label>
-<label>0x052 扭矩发送测试<input type="checkbox" id="nagKillerTest052Enabled"></label>
-<label>0x370 扭矩发送测试<input type="checkbox" id="nagKillerTest370Enabled"></label>
-<label>座舱摄像头始终关闭<input type="checkbox" id="cabinCameraDisableEnabled"></label>
-<p class="hint">座舱摄像头始终关闭走 bus=1/TWAI/物理CANB 的 0x3FD mux1 bit43；开启后每帧写 0。</p>
-<label>方案<select id="nagKillerMode"><option value="1">Mode B：0x052 burst/pause</option><option value="2">Mode C：0x370 hands-on状态机</option><option value="3">Mode D：文档0x370状态机</option></select></label>
-<label>Mode B 注入窗口 ms<input type="number" id="nagKillerBurstMs" min="50" max="10000"></label>
-<label>Mode B 休息窗口 ms<input type="number" id="nagKillerPauseMs" min="0" max="10000"></label>
-<h3>Mode B 扭矩 Nm</h3>
-<label>第1正扭矩<span class="signed"><b>+</b><input type="number" id="nagKillerBPos1Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>第2正扭矩<span class="signed"><b>+</b><input type="number" id="nagKillerBPos2Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>第1负扭矩<span class="signed"><b>-</b><input type="number" id="nagKillerBNeg1Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>第2负扭矩<span class="signed"><b>-</b><input type="number" id="nagKillerBNeg2Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<h3>Mode C 扭矩 Nm</h3>
-<label>负端<span class="signed"><b>-</b><input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>正端<span class="signed"><b>+</b><input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。Nag-Killer联动滚轮开关打开后，识别到 0x399 hands-on state 2..6 或 9..10 会触发 2 轮音量滚轮免打扰，回到 0/1 会停止待触发动作，稳定离开约2秒后才会重新触发。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
+<p class="hint">FSD/AP 激活后随机 1-5 秒自动音量加减恢复，复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 100ms，默认关闭。</p>
 </div>
 
 <div class="card">
@@ -226,24 +213,15 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 </div>
 
 <div class="card">
-<h2>免打扰 / Nag-Killer</h2>
+<h2>免打扰</h2>
 <h3>免打扰</h3>
 <div class="kv"><span>hands-on 0x399 / 警告</span><span><b id="dndHandsOnState">-</b> / <b id="dndWarningActive">-</b></span></div>
 <div class="kv"><span>动作 / 类型 / 阻止</span><span><b id="dndActionActive">-</b> / <b id="dndActionType">-</b> / <b id="dndBlocked">-</b></span></div>
 <div class="kv"><span>DND TX / 触发距今ms</span><span><b id="dndTxCount">-</b> / <b id="dndLastTriggerAgeMs">-</b></span></div>
 <div class="kv"><span>0x3C2滚轮缓存距今ms</span><span id="dndScrollCacheAgeMs">-</span></div>
-<h3>Nag-Killer 扭矩</h3>
-<div class="kv"><span>模式 / 目标ID / 阻止</span><span><b id="nagKillerModeText">-</b> / <b id="nagKillerTargetId">-</b> / <b id="nagKillerBlocked">-</b></span></div>
-<div class="kv"><span>激活 / burst / setHo</span><span><b id="nagKillerActive">-</b> / <b id="nagKillerBurstActive">-</b> / <b id="nagKillerSetHandsOn">-</b></span></div>
-<div class="kv"><span>RX / TX / fail</span><span><b id="nagKillerRxCount">-</b> / <b id="nagKillerTxCount">-</b> / <b id="nagKillerTxFail">-</b></span></div>
-<div class="kv"><span>RX距今 / TX距今ms</span><span><b id="nagKillerLastRxAgeMs">-</b> / <b id="nagKillerLastTxAgeMs">-</b></span></div>
-<div class="kv"><span>AP / hands-on / 目标Ho</span><span><b id="nagKillerApState">-</b> / <b id="nagKillerHandsOnState">-</b> / <b id="nagKillerTargetHandsOn">-</b></span></div>
 <div class="kv"><span>DAS_carLog 0x5D9 / Reason解码</span><span><b id="dasLcHandsOnReasonSeen">-</b> / <b id="dasLcHandsOnReasonDlc">-</b> / <b id="dasLcHandsOnReasonDecode">-</b></span></div>
 <div class="kv"><span>DAS_LC_handsOnReason 前一次 / Previous</span><span><b id="dasLcHandsOnReasonPrevious">-</b> / <b id="dasLcHandsOnReasonPreviousAgeMs">-</b></span></div>
 <div class="kv"><span>DAS_LC_handsOnReason 最近一次 / Latest</span><span><b id="dasLcHandsOnReasonLatest">-</b> / <b id="dasLcHandsOnReasonLatestAgeMs">-</b></span></div>
-<div class="kv"><span>实车扭矩 / 注入扭矩</span><span><b id="nagKillerRealTorqueCx100">-</b> / <b id="nagKillerLastTorqueCx100">-</b></span></div>
-<div class="kv"><span>方向盘角度 / AP年龄 / 转角年龄</span><span><b id="nagKillerSteeringDegCx10">-</b> / <b id="nagKillerApAgeMs">-</b> / <b id="nagKillerSteeringAgeMs">-</b></span></div>
-<div class="kv"><span>NAG联动滚轮 设定/剩余/累计/距今ms</span><span><b id="nagKillerDndActionCount">-</b> / <b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b> / <b id="nagKillerDndLastTriggerAgeMs">-</b></span></div>
 </div>
 
 <div class="card">
@@ -269,8 +247,9 @@ function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")re
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","scrollGearInjectEnabled","can1ReceiveOnly"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","disableTelemetryV1Enabled","disableTelemetryV2Enabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
+function bindTelemetryMutex(){const v1=document.getElementById("disableTelemetryV1Enabled"),v2=document.getElementById("disableTelemetryV2Enabled");if(v1&&v2){v1.addEventListener("change",()=>{if(v1.checked)v2.checked=false});v2.addEventListener("change",()=>{if(v2.checked)v1.checked=false})}}
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
@@ -347,7 +326,7 @@ if(["cpuPct","cpu0Pct","cpu1Pct","loopBusyPct","freeHeapPct","minFreeHeapPct"].i
 if(["loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","can1RxGapMaxUs","can1TxMaxUs","canbRxGapMaxUs","canbTxMaxUs","canbDrainMaxUs"].includes(k))return us(v);
 if(["totalHeapBytes","freeHeapBytes","minFreeHeapBytes"].includes(k))return kb(v);
 if(["can1RxRate","can1TxRate","can1TxFailRate","canbRxRate","canbTxRate","canbTxFailRate"].includes(k))return v+"/s";
-if(k==="canbLastId"||k==="canbErrorFlags"||k==="nagKillerTargetId")return "0x"+(v>>>0).toString(16).toUpperCase();
+if(k==="canbLastId"||k==="canbErrorFlags"||k==="nagKillerTargetId"||k==="disableTelemetryLastId")return v?("0x"+(v>>>0).toString(16).toUpperCase()):"-";
 if(k==="offsetRaw")return (Number(v||0)/4).toFixed(1)+"%";
 if(k==="dasLcHandsOnReasonSeen")return yesNo(v);
 if(k==="dasLcHandsOnReasonDecode")return ["已解码 / Decoded","未收到0x5D9 / No 0x5D9","DLC不足 / Bad DLC","缺DBC bit定义 / Missing bit layout","值超范围 / Invalid value"][v]||v;
@@ -356,10 +335,10 @@ if(k==="dasLcHandsOnReasonPreviousAgeMs"||k==="dasLcHandsOnReasonLatestAgeMs")re
 if(k==="batteryPreheatActive"||k==="batteryPreheatAutoOffLatched"||k==="batteryPreheatChargeDetected"||k==="batteryPreheatFeedbackSeen"||k==="batteryPreheatBms312Seen"||k==="batteryPreheatBms3b2Seen"||k==="batteryPreheatVcfrontSeen")return yesNo(v);
 if(k==="batteryPreheatBlockMask")return preheatBlock(v);
 if(k==="batteryPreheatRunMs"||k==="batteryPreheatStableTempMs")return durMs(v);
-if(k==="batteryPreheatAgeMs"||k==="batteryPreheatFeedbackAgeMs"||k==="batteryPreheatSocAgeMs"||k==="batteryPreheatChargeStatusAgeMs"||k==="batteryPreheatBms312AgeMs"||k==="batteryPreheatBms3b2AgeMs"||k==="batteryPreheatVcfrontAgeMs"||k==="bmsTempDecodedAgeMs")return ageMs(v);
+if(k==="batteryPreheatAgeMs"||k==="batteryPreheatFeedbackAgeMs"||k==="batteryPreheatSocAgeMs"||k==="batteryPreheatChargeStatusAgeMs"||k==="batteryPreheatBms312AgeMs"||k==="batteryPreheatBms3b2AgeMs"||k==="batteryPreheatVcfrontAgeMs"||k==="bmsTempDecodedAgeMs"||k==="disableTelemetryLastTxAgeMs")return ageMs(v);
 if(k==="batteryPreheatAutoOffReason")return ["无","平均温度到42°C","最高温到45°C","开始充电","运行15分钟","手动关闭","电量低于5%"][v]||v;
 if(k==="batteryPreheatSocUiDeciPct")return v<0?"未知":((v/10).toFixed(1)+"%");
-if(k==="batteryPreheatFeedbackBus"||k==="batteryPreheatChargeStatusBus"||k==="batteryPreheatSocBus"||k==="batteryPreheatBms312Bus"||k==="batteryPreheatBms3b2Bus"||k==="batteryPreheatVcfrontBus")return canBus(v);
+if(k==="batteryPreheatFeedbackBus"||k==="batteryPreheatChargeStatusBus"||k==="batteryPreheatSocBus"||k==="batteryPreheatBms312Bus"||k==="batteryPreheatBms3b2Bus"||k==="batteryPreheatVcfrontBus"||k==="disableTelemetryLastBus")return canBus(v);
 if(k==="batteryPreheatChargeStatus")return ["0 DISCONNECTED","1 NO_POWER","2 ABOUT_TO_CHARGE","3 CHARGING","4 CHARGE_COMPLETE","5 CHARGE_STOPPED","6 CALIBRATING"][v]||"-";
 if(k==="batteryPreheatUiTripActive"||k==="batteryPreheatUiNavToSupercharger"||k==="batteryPreheatUiRequestHeat")return yesNo(v);
 if(k==="batteryPreheatHeatingActive")return yesNoUnknown(v);
@@ -456,6 +435,6 @@ function setRecUi(j){const active=j&&j.active;document.getElementById("recState"
 function pollRec(){fetch("/rec_status").then(r=>r.json()).then(setRecUi).catch(()=>{})}
 function startRec(){fetch("/rec_start"+recQuery(),{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(!recTimer)recTimer=setInterval(pollRec,800)})}
 function stopRec(){fetch("/rec_stop",{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(recTimer){clearInterval(recTimer);recTimer=null}})}
-pollStatus();pollRec();
+bindTelemetryMutex();pollStatus();pollRec();
 </script>
 </body></html>)HTML";

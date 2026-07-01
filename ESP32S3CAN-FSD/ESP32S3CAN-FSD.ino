@@ -201,6 +201,8 @@ struct RuntimeConfig {
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
+  bool disableTelemetryV1Enabled = false; // CH|VEH and CH|PARTY/PT mapped to CH
+  bool disableTelemetryV2Enabled = false; // CH|VEH mapped to VEH, CH|PARTY/PT mapped to CH
   bool dndEnabled = false;             // continuous left scroll up/down on 0x3C2
   bool nagKillerEnabled = false;       // experimental steering torque echo
   bool nagKillerDndEnabled = false;    // 0x399 hands-on 2..6/9..10 triggers scroll DND actions
@@ -220,6 +222,20 @@ struct RuntimeConfig {
 };
 
 static RuntimeConfig g_config;
+
+static void normalizeDisableTelemetryConfig(RuntimeConfig& c) {
+  // The two mapping modes are mutually exclusive. Prefer V2 if stale saved
+  // preferences somehow have both set; the WebUI also enforces this.
+  if (c.disableTelemetryV2Enabled) c.disableTelemetryV1Enabled = false;
+
+  // This branch removes these WebUI-controlled features. Force them off so old
+  // Flash preferences cannot keep hidden behavior alive.
+  c.cabinCameraDisableEnabled = false;
+  c.nagKillerEnabled = false;
+  c.nagKillerDndEnabled = false;
+  c.nagKillerTest052Enabled = false;
+  c.nagKillerTest370Enabled = false;
+}
 
 static uint8_t normalizeCanBFilterMode(uint8_t mode) {
   // Legacy saved value 2 used to mean "minimum"; map it to feature IDs.
@@ -318,6 +334,11 @@ struct RuntimeStatus {
   uint32_t canbTxSchedExpired = 0;
   uint32_t canbTxSchedFail = 0;
   uint32_t canbTxSchedBudgetHit = 0;
+  uint32_t disableTelemetryTxCount = 0;
+  uint32_t disableTelemetryTxFail = 0;
+  uint32_t disableTelemetryLastId = 0;
+  uint8_t disableTelemetryLastBus = 0;
+  uint32_t disableTelemetryLastTxAgeMs = 0;
   uint32_t webTaskMaxUs = 0;
   uint32_t totalHeapBytes = 0;
   uint32_t freeHeapBytes = 0;
@@ -480,7 +501,7 @@ static inline RuntimeConfig configSnapshot() {
 }
 
 static inline void applyBuildModeGuards(RuntimeConfig& c) {
-  (void)c;  // no build-mode overrides on this branch
+  normalizeDisableTelemetryConfig(c);
 }
 
 #ifdef ENABLE_LIGHT_WEBUI
@@ -607,6 +628,7 @@ static inline void recordCanFrame(const can_frame&, char, uint8_t) {}
 // ---- TWAI helpers ----
 
 static bool twaiRecoveryInProgress = false;
+static uint32_t disableTelemetryLastTxMs = 0;
 static uint32_t batteryPreheatLastSendMs = 0;
 static uint32_t batteryPreheatStartMs = 0;
 static uint32_t batteryPreheatTargetStableStartMs = 0;
@@ -820,6 +842,7 @@ constexpr uint32_t CAN_ID_NAG_MODE_B_TARGET = 0x052;
 constexpr uint32_t CAN_ID_NAG_MODE_C_TARGET = 0x370;
 constexpr uint32_t CAN_ID_NAG_STEERING_ANGLE = 0x129;
 constexpr uint32_t CAN_ID_EPAS_SYS_STATUS = 0x313;
+constexpr uint32_t CAN_ID_DAS_STATUS2 = 0x389;
 constexpr uint32_t CAN_ID_BMS_STATUS = 0x212;
 constexpr uint32_t CAN_ID_BMS_SOC_STATUS = 0x292;
 constexpr uint32_t CAN_ID_BMS_THERMAL_STATUS = 0x312;
@@ -830,6 +853,17 @@ constexpr uint32_t CAN_ID_BMS_LOG2 = 0x3B2;
 constexpr uint32_t CAN_ID_BMS_PACK_TEMPERATURES = 0x712;
 constexpr uint32_t CAN_ID_DAS_STATUS = 0x399;
 constexpr uint32_t CAN_ID_DAS_CAR_LOG = 0x5D9;
+constexpr uint32_t CAN_ID_UI_VEHICLE_CONTROL2 = 0x3B3;
+constexpr uint32_t CAN_ID_VCFRONT_ALERT_MATRIX = 0x340;
+constexpr uint32_t CAN_ID_VCFRONT1_ALERT_MATRIX = 0x341;
+constexpr uint32_t CAN_ID_VCFRONT2_ALERT_MATRIX = 0x342;
+constexpr uint32_t CAN_ID_VCLEFT_ALERT_MATRIX = 0x360;
+constexpr uint32_t CAN_ID_USM_ALERT_MATRIX = 0x3BA;
+constexpr uint32_t CAN_ID_VCRIGHT_ALERT_MATRIX = 0x3C0;
+constexpr uint32_t CAN_ID_EPBL_ALERT_MATRIX = 0x3C8;
+constexpr uint32_t CAN_ID_VCBATT0_ALERT_MATRIX = 0x3CD;
+constexpr uint32_t CAN_ID_VCBATT1_ALERT_MATRIX = 0x3CE;
+constexpr uint32_t CAN_ID_VCBATT2_ALERT_MATRIX = 0x3CF;
 constexpr uint32_t CAN_ID_BRAKE_PEDAL = 0x145;
 constexpr uint32_t CAN_ID_RCM_INERTIAL2_CH = 0x111;
 constexpr uint32_t CAN_ID_RCM_INERTIAL2_ETH = 0x116;
@@ -845,6 +879,7 @@ static inline bool isRelevantCanId(uint32_t canId) {
          canId == CAN_ID_NAG_MODE_C_TARGET ||
          canId == CAN_ID_NAG_STEERING_ANGLE ||
          canId == CAN_ID_EPAS_SYS_STATUS ||
+         canId == CAN_ID_DAS_STATUS2 ||
          canId == CAN_ID_BRAKE_PEDAL ||
          canId == CAN_ID_RCM_INERTIAL2_CH ||
          canId == CAN_ID_RCM_INERTIAL2_ETH ||
@@ -863,6 +898,9 @@ static inline bool isRelevantCanId(uint32_t canId) {
          canId == CAN_ID_BMS_PACK_TEMPERATURES ||
          canId == CAN_ID_DAS_STATUS ||
          canId == CAN_ID_DAS_CAR_LOG ||
+         canId == CAN_ID_UI_VEHICLE_CONTROL2 ||
+         canId == CAN_ID_VCFRONT_ALERT_MATRIX ||
+         canId == CAN_ID_USM_ALERT_MATRIX ||
          canId == CAN_ID_FOLLOW_DISTANCE ||
          canId == CAN_ID_AP_CONTROL;
 }
@@ -1790,6 +1828,156 @@ inline void setBit(can_frame& frame, int bit, bool value) {
   else frame.data[byteIndex] &= static_cast<uint8_t>(~mask);
 }
 
+static bool setBitIfPresent(can_frame& frame, uint8_t bit, bool value) {
+  if (static_cast<uint16_t>(bit) >= static_cast<uint16_t>(frame.can_dlc) * 8U) return false;
+  const uint8_t byteIndex = static_cast<uint8_t>(bit / 8);
+  const uint8_t bitIndex = static_cast<uint8_t>(bit % 8);
+  const uint8_t before = frame.data[byteIndex];
+  const uint8_t mask = static_cast<uint8_t>(1U << bitIndex);
+  frame.data[byteIndex] = value
+      ? static_cast<uint8_t>(before | mask)
+      : static_cast<uint8_t>(before & static_cast<uint8_t>(~mask));
+  return frame.data[byteIndex] != before;
+}
+
+static void advanceMaskedCounter(can_frame& frame, uint8_t byteIndex, uint8_t mask) {
+  if (byteIndex >= frame.can_dlc || mask == 0) return;
+  uint8_t shift = 0;
+  while (shift < 8 && (mask & (1U << shift)) == 0) shift++;
+  const uint8_t fieldMask = static_cast<uint8_t>(mask >> shift);
+  if (fieldMask == 0) return;
+  const uint8_t current = static_cast<uint8_t>((frame.data[byteIndex] >> shift) & fieldMask);
+  const uint8_t next = static_cast<uint8_t>((current + 1U) & fieldMask);
+  frame.data[byteIndex] = static_cast<uint8_t>(
+      (frame.data[byteIndex] & static_cast<uint8_t>(~mask)) |
+      ((next << shift) & mask));
+}
+
+static uint8_t vehicleChecksum(const can_frame& frame, uint8_t checksumByteIndex = 7) {
+  if (checksumByteIndex >= frame.can_dlc) return 0;
+  uint16_t sum = static_cast<uint16_t>(frame.can_id & 0xFF) +
+                 static_cast<uint16_t>((frame.can_id >> 8) & 0xFF);
+  for (uint8_t i = 0; i < frame.can_dlc; ++i) {
+    if (i == checksumByteIndex) continue;
+    sum += frame.data[i];
+  }
+  return static_cast<uint8_t>(sum & 0xFF);
+}
+
+static uint8_t disableTelemetryMode(const RuntimeConfig& cfg) {
+  if (cfg.disableTelemetryV2Enabled) return 2;
+  return cfg.disableTelemetryV1Enabled ? 1 : 0;
+}
+
+static bool disableTelemetryIdOnBus(uint8_t mode, uint8_t bus, uint32_t id) {
+  if (mode == 0) return false;
+  constexpr uint8_t BUS_CH = 1;
+  constexpr uint8_t BUS_VEH = 2;
+  switch (id) {
+    case CAN_ID_UI_DRIVER_ASSIST_CONTROL:
+    case CAN_ID_DAS_STATUS2:
+    case CAN_ID_USM_ALERT_MATRIX:
+      return bus == BUS_CH;
+    case CAN_ID_VCFRONT1_ALERT_MATRIX:
+    case CAN_ID_VCFRONT2_ALERT_MATRIX:
+    case CAN_ID_VCLEFT_ALERT_MATRIX:
+    case CAN_ID_VCRIGHT_ALERT_MATRIX:
+    case CAN_ID_EPBL_ALERT_MATRIX:
+    case CAN_ID_VCBATT0_ALERT_MATRIX:
+    case CAN_ID_VCBATT1_ALERT_MATRIX:
+    case CAN_ID_VCBATT2_ALERT_MATRIX:
+      return bus == BUS_VEH;
+    case CAN_ID_AP_CONTROL:
+    case CAN_ID_UI_VEHICLE_CONTROL2:
+    case CAN_ID_VCFRONT_ALERT_MATRIX:
+      return bus == (mode == 1 ? BUS_CH : BUS_VEH);
+    default:
+      return false;
+  }
+}
+
+static bool applyDisableTelemetryFrame(can_frame& frame, uint8_t bus, const RuntimeConfig& cfg) {
+  const uint8_t mode = disableTelemetryMode(cfg);
+  if (!disableTelemetryIdOnBus(mode, bus, frame.can_id)) return false;
+
+  const uint8_t original[8] = {
+    frame.data[0], frame.data[1], frame.data[2], frame.data[3],
+    frame.data[4], frame.data[5], frame.data[6], frame.data[7]
+  };
+
+  switch (frame.can_id) {
+    case CAN_ID_UI_DRIVER_ASSIST_CONTROL:
+      setBitIfPresent(frame, 19, false);
+      setBitIfPresent(frame, 42, false);
+      setBitIfPresent(frame, 43, false);
+      setBitIfPresent(frame, 44, false);
+      setBitIfPresent(frame, 55, false);
+      break;
+
+    case CAN_ID_AP_CONTROL:
+      if (frame.can_dlc < 7 || (frame.data[0] & 0x07) != 1) return false;
+      setBitIfPresent(frame, 48, false);
+      setBitIfPresent(frame, 50, false);
+      break;
+
+    case CAN_ID_DAS_STATUS2:
+      if (frame.can_dlc < 8) return false;
+      setBitIfPresent(frame, 13, false);
+      setBitIfPresent(frame, 34, false);
+      setBitIfPresent(frame, 35, false);
+      if (memcmp(original, frame.data, frame.can_dlc) != 0) {
+        advanceMaskedCounter(frame, 6, 0xF0);
+        frame.data[7] = vehicleChecksum(frame);
+      }
+      break;
+
+    case CAN_ID_UI_VEHICLE_CONTROL2:
+      setBitIfPresent(frame, 31, false);
+      break;
+
+    case CAN_ID_VCFRONT_ALERT_MATRIX:
+    case CAN_ID_VCFRONT1_ALERT_MATRIX:
+    case CAN_ID_VCFRONT2_ALERT_MATRIX:
+    case CAN_ID_VCLEFT_ALERT_MATRIX:
+    case CAN_ID_USM_ALERT_MATRIX:
+    case CAN_ID_VCRIGHT_ALERT_MATRIX:
+    case CAN_ID_EPBL_ALERT_MATRIX:
+    case CAN_ID_VCBATT0_ALERT_MATRIX:
+    case CAN_ID_VCBATT1_ALERT_MATRIX:
+    case CAN_ID_VCBATT2_ALERT_MATRIX:
+      if (frame.can_dlc < 5 || (frame.data[0] & 0x0F) != 0) return false;
+      setBitIfPresent(frame, 33, false);
+      break;
+
+    default:
+      return false;
+  }
+
+  return memcmp(original, frame.data, frame.can_dlc) != 0;
+}
+
+static bool sendDisableTelemetryFrame(const can_frame& frame, uint8_t bus) {
+  bool sent = false;
+  if (bus == 1) {
+    sent = twai_send(frame);
+  }
+#ifdef ENABLE_CANB_MCP2515
+  else if (bus == 2) {
+    sent = canbScheduleTx(frame, CANB_TX_SRC_OTHER, CANB_TX_PRIO_MED, CANB_TX_TTL_DEFAULT_MS, true);
+  }
+#endif
+
+  if (sent) {
+    g_status.disableTelemetryTxCount++;
+    g_status.disableTelemetryLastId = frame.can_id;
+    g_status.disableTelemetryLastBus = bus;
+    disableTelemetryLastTxMs = millis();
+  } else {
+    g_status.disableTelemetryTxFail++;
+  }
+  return sent;
+}
+
 inline int8_t cabinCameraBit43Override(const RuntimeConfig& cfg, uint32_t now) {
   (void)now;
   return cfg.cabinCameraDisableEnabled ? 0 : -1;
@@ -2252,8 +2440,8 @@ static bool applyCanBFilters(uint8_t mode) {
     if (canb.setFilter(MCP2515::RXF3, false, 0x203) != MCP2515::ERROR_OK) return false;
     // Covers: 0x321, 0x370.
     if (canb.setFilter(MCP2515::RXF4, false, 0x200) != MCP2515::ERROR_OK) return false;
-    // Spare coarse slot kept for nearby feature expansion without changing masks.
-    if (canb.setFilter(MCP2515::RXF5, false, 0x205) != MCP2515::ERROR_OK) return false;
+    // Covers telemetry expansion IDs such as 0x3FD and 0x3CD..0x3CF.
+    if (canb.setFilter(MCP2515::RXF5, false, 0x20C) != MCP2515::ERROR_OK) return false;
   } else {
     if (canb.setFilterMask(MCP2515::MASK0, false, 0x000) != MCP2515::ERROR_OK) return false;
     // All-pass mode is useful for capture and unknown-ID debugging.
@@ -3425,6 +3613,10 @@ static void handleVcleftSwitchFrame(const can_frame& frame, const RuntimeConfig&
 static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg) {
   // Stage 1: statistics only. No heavy work, no Serial, no JSON, no bridging.
   canbLastId = frame.can_id;
+  can_frame telemetryFrame = frame;
+  if (applyDisableTelemetryFrame(telemetryFrame, 2, cfg)) {
+    sendDisableTelemetryFrame(telemetryFrame, 2);
+  }
 
   handleNagKillerContextFrame(frame, cfg);
   if (frame.can_id == CAN_ID_NAG_MODE_B_TARGET || frame.can_id == CAN_ID_NAG_MODE_C_TARGET) {
@@ -3858,13 +4050,17 @@ static void handleStatus() {
   if (!s.dasLcHandsOnReasonSeen) {
     s.dasLcHandsOnReasonDecode = DAS_LC_REASON_DECODE_NO_FRAME;
   }
+  s.disableTelemetryLastTxAgeMs =
+      disableTelemetryLastTxMs == 0 ? 0 : (now - disableTelemetryLastTxMs);
 
   String j;
-  j.reserve(10800);
+  j.reserve(11200);
   j += '{';
   j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
   j += ",\"cabinCameraDisableEnabled\":"; j += c.cabinCameraDisableEnabled ? 1 : 0;
+  j += ",\"disableTelemetryV1Enabled\":"; j += c.disableTelemetryV1Enabled ? 1 : 0;
+  j += ",\"disableTelemetryV2Enabled\":"; j += c.disableTelemetryV2Enabled ? 1 : 0;
   j += ",\"slewPctPerSec\":";        j += c.slewPctPerSec;
   j += ",\"lowSpeedMaxPctRaw\":";    j += c.lowSpeedMaxPctRaw;
   j += ",\"targetBelow60\":";        j += c.targetBelow60;
@@ -3972,6 +4168,11 @@ static void handleStatus() {
   j += ",\"canbTxSchedExpired\":";   j += s.canbTxSchedExpired;
   j += ",\"canbTxSchedFail\":";      j += s.canbTxSchedFail;
   j += ",\"canbTxSchedBudgetHit\":"; j += s.canbTxSchedBudgetHit;
+  j += ",\"disableTelemetryTxCount\":"; j += s.disableTelemetryTxCount;
+  j += ",\"disableTelemetryTxFail\":"; j += s.disableTelemetryTxFail;
+  j += ",\"disableTelemetryLastId\":"; j += s.disableTelemetryLastId;
+  j += ",\"disableTelemetryLastBus\":"; j += s.disableTelemetryLastBus;
+  j += ",\"disableTelemetryLastTxAgeMs\":"; j += s.disableTelemetryLastTxAgeMs;
   j += ",\"webTaskMaxUs\":";         j += s.webTaskMaxUs;
   j += ",\"totalHeapBytes\":";       j += s.totalHeapBytes;
   j += ",\"freeHeapBytes\":";        j += s.freeHeapBytes;
@@ -4122,6 +4323,8 @@ static void handleConfig() {
   c.fsdEnabled              = argBool("fsdEnabled", c.fsdEnabled);
   c.autoSpeedOffsetEnabled  = argBool("autoSpeedOffsetEnabled", c.autoSpeedOffsetEnabled);
   c.cabinCameraDisableEnabled = argBool("cabinCameraDisableEnabled", c.cabinCameraDisableEnabled);
+  c.disableTelemetryV1Enabled = argBool("disableTelemetryV1Enabled", c.disableTelemetryV1Enabled);
+  c.disableTelemetryV2Enabled = argBool("disableTelemetryV2Enabled", c.disableTelemetryV2Enabled);
   c.slewPctPerSec           = static_cast<uint8_t>(argU16("slewPctPerSec", c.slewPctPerSec));
   c.lowSpeedMaxPctRaw       = static_cast<uint8_t>(argU16("lowSpeedMaxPctRaw", c.lowSpeedMaxPctRaw));
   c.targetBelow60           = argU16("targetBelow60", c.targetBelow60);
@@ -4388,6 +4591,8 @@ static void loadConfigFromPrefs() {
   c.rearFogBrakeStrobeEnabled = prefs.getBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled   = prefs.getBool("revStrobe", c.reverseStrobeEnabled);
   c.batteryPreheatEnabled  = prefs.getBool("batHeat", c.batteryPreheatEnabled);
+  c.disableTelemetryV1Enabled = prefs.getBool("dtelV1", c.disableTelemetryV1Enabled);
+  c.disableTelemetryV2Enabled = prefs.getBool("dtelV2", c.disableTelemetryV2Enabled);
   c.dndEnabled             = prefs.getBool("dndCont", c.dndEnabled);
   c.nagKillerEnabled       = prefs.getBool("nagEn", c.nagKillerEnabled);
   c.nagKillerDndEnabled    = prefs.getBool("nagDnd", c.nagKillerDndEnabled);
@@ -4436,6 +4641,8 @@ static void saveConfigToPrefs() {
   prefs.putBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   prefs.putBool("revStrobe", c.reverseStrobeEnabled);
   prefs.putBool("batHeat", c.batteryPreheatEnabled);
+  prefs.putBool("dtelV1", c.disableTelemetryV1Enabled);
+  prefs.putBool("dtelV2", c.disableTelemetryV2Enabled);
   prefs.putBool("dndCont", c.dndEnabled);
   prefs.putBool("nagEn", c.nagKillerEnabled);
   prefs.putBool("nagDnd", c.nagKillerDndEnabled);
@@ -4634,6 +4841,13 @@ static void updateRuntimeDiagnostics(uint32_t loopElapsedUs) {
 
 static void handleTwaiFrame(can_frame& frame, const RuntimeConfig& cfg) {
   recordCanFrame(frame, 'R', 1);
+  if (applyDisableTelemetryFrame(frame, 1, cfg)) {
+    // 0x3FD mux1 is already re-transmitted by the normal AP-control handler
+    // below; avoid emitting a duplicate telemetry echo for that frame.
+    if (!(frame.can_id == CAN_ID_AP_CONTROL && readMuxID(frame) == 1)) {
+      sendDisableTelemetryFrame(frame, 1);
+    }
+  }
   handleBatteryTempDiagFrame(frame, 1);
   handleBatteryPreheatBmsDiagFrame(frame, 1);
   handleBatteryPreheatFeedbackFrame(frame, 1);
