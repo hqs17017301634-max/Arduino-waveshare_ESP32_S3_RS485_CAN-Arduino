@@ -87,12 +87,6 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 </div>
 
 <div class="card">
-<h2>免打扰</h2>
-<label>持续滚轮免打扰<input type="checkbox" id="dndEnabled"></label>
-<p class="hint">FSD/AP 激活后随机 1-5 秒自动音量加减恢复，复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 100ms，默认关闭。</p>
-</div>
-
-<div class="card">
 <h2>滚轮换挡 / 预热 / MCP2515</h2>
 <label>滚轮换挡启用<input type="checkbox" id="scrollGearInjectEnabled"></label>
 <p class="hint">踩刹车 + 右滚轮，bus=2/MCP2515/物理CANA 发送 0x229，默认关闭。</p>
@@ -213,18 +207,6 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 </div>
 
 <div class="card">
-<h2>免打扰</h2>
-<h3>免打扰</h3>
-<div class="kv"><span>hands-on 0x399 / 警告</span><span><b id="dndHandsOnState">-</b> / <b id="dndWarningActive">-</b></span></div>
-<div class="kv"><span>动作 / 类型 / 阻止</span><span><b id="dndActionActive">-</b> / <b id="dndActionType">-</b> / <b id="dndBlocked">-</b></span></div>
-<div class="kv"><span>DND TX / 触发距今ms</span><span><b id="dndTxCount">-</b> / <b id="dndLastTriggerAgeMs">-</b></span></div>
-<div class="kv"><span>0x3C2滚轮缓存距今ms</span><span id="dndScrollCacheAgeMs">-</span></div>
-<div class="kv"><span>DAS_carLog 0x5D9 / Reason解码</span><span><b id="dasLcHandsOnReasonSeen">-</b> / <b id="dasLcHandsOnReasonDlc">-</b> / <b id="dasLcHandsOnReasonDecode">-</b></span></div>
-<div class="kv"><span>DAS_LC_handsOnReason 前一次 / Previous</span><span><b id="dasLcHandsOnReasonPrevious">-</b> / <b id="dasLcHandsOnReasonPreviousAgeMs">-</b></span></div>
-<div class="kv"><span>DAS_LC_handsOnReason 最近一次 / Latest</span><span><b id="dasLcHandsOnReasonLatest">-</b> / <b id="dasLcHandsOnReasonLatestAgeMs">-</b></span></div>
-</div>
-
-<div class="card">
 <h2>滚轮换挡 / 系统</h2>
 <div class="kv"><span>当前挡位 0x118</span><span id="currentGear">-</span></div>
 <div class="kv"><span>DAS AP state 0x399</span><span id="dasAutopilotState">-</span></div>
@@ -247,7 +229,7 @@ function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")re
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","disableTelemetryV1Enabled","disableTelemetryV2Enabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","disableTelemetryV1Enabled","disableTelemetryV2Enabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function bindTelemetryMutex(){const v1=document.getElementById("disableTelemetryV1Enabled"),v2=document.getElementById("disableTelemetryV2Enabled");if(v1&&v2){v1.addEventListener("change",()=>{if(v1.checked)v2.checked=false});v2.addEventListener("change",()=>{if(v2.checked)v1.checked=false})}}
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
