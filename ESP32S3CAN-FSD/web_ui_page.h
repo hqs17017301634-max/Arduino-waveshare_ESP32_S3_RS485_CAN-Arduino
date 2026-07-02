@@ -16,9 +16,9 @@ h1{font-size:21px;margin:2px 0 12px;letter-spacing:0;font-weight:780;color:var(-
 label{display:flex;justify-content:space-between;align-items:center;min-height:40px;margin:5px 0;font-size:14px;gap:12px;color:var(--text);min-width:0}
 input,select,button{max-width:100%}
 input[type=number]{width:98px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 9px;font-size:14px}
-input[type=text],select{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px;margin-top:4px;font-size:14px}
+input[type=text],input[type=password],select{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px;margin-top:4px;font-size:14px}
 label input[type=number]{flex:0 0 98px;margin-left:auto}label select{flex:1;min-width:160px}label input[type=checkbox]{margin-left:auto}
-input[type=number]:focus,input[type=text]:focus,select:focus{outline:none;border-color:var(--accent)}
+input[type=number]:focus,input[type=text]:focus,input[type=password]:focus,select:focus{outline:none;border-color:var(--accent)}
 input[type=checkbox]{appearance:none;-webkit-appearance:none;width:48px;height:27px;min-width:48px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);position:relative;vertical-align:middle}
 input[type=checkbox]:before{content:"";position:absolute;width:21px;height:21px;left:2px;top:2px;border-radius:50%;background:#dce3ea;transition:left .12s,background .12s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
 input[type=checkbox]:checked{background:var(--ok);border-color:var(--ok)}input[type=checkbox]:checked:before{left:23px;background:#fff}
@@ -53,6 +53,11 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="card">
 <h2>FSD / 速度</h2>
 <label>FSD 启用<input type="checkbox" id="fsdEnabled"></label>
+<label>FSD 激活帧补发<input type="checkbox" id="fsdActivationResendEnabled"></label>
+<label>补发周期 ms<input type="number" id="fsdActivationResendMs" min="1" max="1000" step="1"></label>
+<p class="hint">开启后按填入周期补发已缓存的 0x3FD mux0/1/2 修改后帧；范围 1..1000ms，不凭空造帧，关闭开关即停止。</p>
+<div class="kv"><span>补发状态 / 周期</span><span><b id="fsdActivationResendActive">-</b> / <b id="fsdActivationResendPeriodMs">-</b></span></div>
+<div class="kv"><span>补发次数 / mux缓存</span><span><b id="fsdActivationResendTxCount">-</b> / <b id="fsdActivationResendCachedMuxMask">-</b></span></div>
 <label>自动速度偏移<input type="checkbox" id="autoSpeedOffsetEnabled"></label>
 <label>缓降百分比/秒<input type="number" id="slewPctPerSec" min="0" max="100"></label>
 <label>低速最大偏移 %<input type="number" id="lowSpeedMaxPctRaw" min="0" max="50" step="0.25"></label>
@@ -72,6 +77,39 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <p class="hint">两个版本互斥。版本1：CH|VEH 和 CH|PARTY/PT 都归到 CH。版本2：CH|VEH 归到 VEH，CH|PARTY/PT 仍归到 CH。只复制实时帧并清零目标位；0x389 会更新 counter/checksum。</p>
 <div class="kv"><span>Telemetry TX / fail</span><span><b id="disableTelemetryTxCount">-</b> / <b id="disableTelemetryTxFail">-</b></span></div>
 <div class="kv"><span>最近ID / 总线 / 距今</span><span><b id="disableTelemetryLastId">-</b> / <b id="disableTelemetryLastBus">-</b> / <b id="disableTelemetryLastTxAgeMs">-</b></span></div>
+</div>
+
+<div class="card">
+<h2>隐藏功能</h2>
+<label>免打扰/高级功能解锁<input type="checkbox" id="hiddenControlsUnlocked"></label>
+<input type="password" id="hiddenControlsPassword" placeholder="输入密码后显示 CABIN / Nag / DND">
+<p class="hint">默认不显示也不启用隐藏功能。开启时需要密码；保存后固件才允许 CABIN / Nag / DND 等隐藏开关生效。</p>
+</div>
+
+<div class="card hiddenFeature hidden">
+<h2>CABIN / DND</h2>
+<label>座舱摄像头关闭<input type="checkbox" id="cabinCameraDisableEnabled"></label>
+<p class="hint">0x3FD mux1 清座舱摄像头相关位；默认关闭。</p>
+<label>持续滚轮免打扰<input type="checkbox" id="dndEnabled"></label>
+<p class="hint">FSD/AP active 时按随机 1-5 秒触发左滚轮 0x01 -> 0x00 -> 0x3F -> 0x00；默认关闭。</p>
+</div>
+
+<div class="card hiddenFeature hidden">
+<h2>Nag-Killer</h2>
+<label>Nag-Killer 扭矩<input type="checkbox" id="nagKillerEnabled"></label>
+<label>Nag联动滚轮免打扰<input type="checkbox" id="nagKillerDndEnabled"></label>
+<label>0x052 扭矩测试<input type="checkbox" id="nagKillerTest052Enabled"></label>
+<label>0x370 扭矩测试<input type="checkbox" id="nagKillerTest370Enabled"></label>
+<label>模式<select id="nagKillerMode"><option value="1">Mode B / 0x052</option><option value="2">Mode C / 0x370</option><option value="3">Mode D / 文档状态机</option></select></label>
+<label>Mode B burst ms<input type="number" id="nagKillerBurstMs" min="100" max="5000"></label>
+<label>Mode B pause ms<input type="number" id="nagKillerPauseMs" min="100" max="10000"></label>
+<label>Mode B +1 Nm<input type="number" id="nagKillerBPos1Nm" min="0" max="2.8" step="0.01"></label>
+<label>Mode B +2 Nm<input type="number" id="nagKillerBPos2Nm" min="0" max="2.8" step="0.01"></label>
+<label>Mode B -1 Nm 绝对值<input type="number" id="nagKillerBNeg1Nm" min="0" max="2.8" step="0.01"></label>
+<label>Mode B -2 Nm 绝对值<input type="number" id="nagKillerBNeg2Nm" min="0" max="2.8" step="0.01"></label>
+<label>Mode C/D 负向 Nm 绝对值<input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"></label>
+<label>Mode C/D 正向 Nm<input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"></label>
+<p class="hint">隐藏功能默认关闭；解锁后仍需单独打开对应开关并保存。</p>
 </div>
 
 <div class="card">
@@ -180,6 +218,17 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>速度偏移 kph / 百分比</span><span><b id="offsetKph">-</b> / <b id="offsetRaw">-</b></span></div>
 </div>
 
+<div class="card hiddenFeature hidden">
+<h2>NAG / DND 诊断</h2>
+<div class="kv"><span>DND hands-on / warning</span><span><b id="dndHandsOnState">-</b> / <b id="dndWarningActive">-</b></span></div>
+<div class="kv"><span>DND动作 / 阻止 / TX</span><span><b id="dndActionActive">-</b> / <b id="dndBlocked">-</b> / <b id="dndTxCount">-</b></span></div>
+<div class="kv"><span>NAG模式 / active / 阻止</span><span><b id="nagKillerModeText">-</b> / <b id="nagKillerActive">-</b> / <b id="nagKillerBlocked">-</b></span></div>
+<div class="kv"><span>NAG目标ID / RX / TX</span><span><b id="nagKillerTargetId">-</b> / <b id="nagKillerRxCount">-</b> / <b id="nagKillerTxCount">-</b></span></div>
+<div class="kv"><span>AP状态 / hands-on / 方向角</span><span><b id="nagKillerApState">-</b> / <b id="nagKillerHandsOnState">-</b> / <b id="nagKillerSteeringDegCx10">-</b></span></div>
+<div class="kv"><span>实际扭矩 / 最近扭矩</span><span><b id="nagKillerRealTorqueCx100">-</b> / <b id="nagKillerLastTorqueCx100">-</b></span></div>
+<div class="kv"><span>NAG联动滚轮 次数/剩余/累计</span><span><b id="nagKillerDndActionCount">-</b> / <b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b></span></div>
+</div>
+
 <div class="card">
 <h2>电池预热</h2>
 <div class="kv"><span>电池预热发送中</span><span id="batteryPreheatActive">-</span></div>
@@ -229,9 +278,13 @@ function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")re
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","disableTelemetryV1Enabled","disableTelemetryV2Enabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","scrollGearInjectEnabled","can1ReceiveOnly"];
+const hiddenControlsPasswordValue="teslacan123456";
+const cfgIds=["fsdEnabled","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","hiddenControlsUnlocked","cabinCameraDisableEnabled","disableTelemetryV1Enabled","disableTelemetryV2Enabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerEnabled","nagKillerDndEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","scrollGearInjectEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function bindTelemetryMutex(){const v1=document.getElementById("disableTelemetryV1Enabled"),v2=document.getElementById("disableTelemetryV2Enabled");if(v1&&v2){v1.addEventListener("change",()=>{if(v1.checked)v2.checked=false});v2.addEventListener("change",()=>{if(v2.checked)v1.checked=false})}}
+function setHiddenControlsVisible(on){document.querySelectorAll(".hiddenFeature").forEach(e=>e.classList.toggle("hidden",!on))}
+function bindHiddenControlsUnlock(){const sw=document.getElementById("hiddenControlsUnlocked"),pw=document.getElementById("hiddenControlsPassword");if(!sw)return;sw.addEventListener("change",()=>{if(sw.checked){const v=(pw&&pw.value)?pw.value:prompt("请输入免打扰/高级功能密码","");if(v!==hiddenControlsPasswordValue){sw.checked=false;if(pw)pw.value="";setHiddenControlsVisible(false);showResult("密码错误，隐藏功能未显示");return}if(pw)pw.value=v;setHiddenControlsVisible(true);showResult("隐藏功能已显示")}else{if(pw)pw.value="";setHiddenControlsVisible(false);showResult("隐藏功能已关闭，保存后相关功能会被固件强制关闭")}})}
+function syncHiddenControlsVisibility(){const sw=document.getElementById("hiddenControlsUnlocked");setHiddenControlsVisible(!!(sw&&sw.checked))}
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
@@ -309,6 +362,10 @@ if(["loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","ca
 if(["totalHeapBytes","freeHeapBytes","minFreeHeapBytes"].includes(k))return kb(v);
 if(["can1RxRate","can1TxRate","can1TxFailRate","canbRxRate","canbTxRate","canbTxFailRate"].includes(k))return v+"/s";
 if(k==="canbLastId"||k==="canbErrorFlags"||k==="nagKillerTargetId"||k==="disableTelemetryLastId")return v?("0x"+(v>>>0).toString(16).toUpperCase()):"-";
+if(k==="fsdActivationResendActive")return yesNo(v);
+if(k==="fsdActivationResendCachedMuxMask")return v?("mux "+[0,1,2].filter(i=>v&(1<<i)).join("/")):"-";
+if(k==="fsdActivationResendPeriodMs")return v+" ms";
+if(k==="fsdActivationResendLastTxAgeMs")return ageMs(v);
 if(k==="offsetRaw")return (Number(v||0)/4).toFixed(1)+"%";
 if(k==="dasLcHandsOnReasonSeen")return yesNo(v);
 if(k==="dasLcHandsOnReasonDecode")return ["已解码 / Decoded","未收到0x5D9 / No 0x5D9","DLC不足 / Bad DLC","缺DBC bit定义 / Missing bit layout","值超范围 / Invalid value"][v]||v;
@@ -405,9 +462,9 @@ if(adviceEl)adviceEl.textContent=level===2?"优先关闭抓包调试或切到功
 lastDiag=j;
 }
 function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&e.tagName!=="INPUT"&&e.tagName!=="SELECT")e.textContent=fmtStat(k,j[k])})}
-function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
+function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});syncHiddenControlsVisibility();loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
-function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);p.set(k,getVal(e))});return p}
+function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);if(e)p.set(k,getVal(e))});const pw=document.getElementById("hiddenControlsPassword");if(pw&&pw.value)p.set("hiddenControlsPassword",pw.value);return p}
 function saveConfig(){fetch("/config",{method:"POST",body:body()}).then(()=>fetch("/save",{method:"POST"})).then(async r=>{showResult(await r.text());pollStatus()})}
 function rebootBoard(){setPolling(false);const p=document.getElementById("poll");if(p)p.checked=false;showResult("正在重启...");fetch("/reboot",{method:"POST"}).catch(()=>{})}
 function recQuery(){const ids=document.getElementById("recIds").value.trim();return ids?("?ids="+encodeURIComponent(ids)):""}
@@ -417,6 +474,6 @@ function setRecUi(j){const active=j&&j.active;document.getElementById("recState"
 function pollRec(){fetch("/rec_status").then(r=>r.json()).then(setRecUi).catch(()=>{})}
 function startRec(){fetch("/rec_start"+recQuery(),{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(!recTimer)recTimer=setInterval(pollRec,800)})}
 function stopRec(){fetch("/rec_stop",{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(recTimer){clearInterval(recTimer);recTimer=null}})}
-bindTelemetryMutex();pollStatus();pollRec();
+bindTelemetryMutex();bindHiddenControlsUnlock();pollStatus();pollRec();
 </script>
 </body></html>)HTML";

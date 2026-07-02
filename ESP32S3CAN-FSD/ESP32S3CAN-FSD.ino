@@ -173,6 +173,10 @@ constexpr uint8_t DAS_LC_REASON_DECODE_NO_FRAME = 1;
 constexpr uint8_t DAS_LC_REASON_DECODE_BAD_DLC = 2;
 constexpr uint8_t DAS_LC_REASON_DECODE_NO_LAYOUT = 3;
 constexpr uint8_t DAS_LC_REASON_DECODE_INVALID_VALUE = 4;
+constexpr const char* HIDDEN_CONTROLS_PASSWORD = "teslacan123456";
+constexpr uint16_t FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS = 100;
+constexpr uint16_t FSD_ACTIVATION_RESEND_MIN_PERIOD_MS = 1;
+constexpr uint16_t FSD_ACTIVATION_RESEND_MAX_PERIOD_MS = 1000;
 
 // ---- Runtime configuration (WebUI-tunable; defaults match the legacy constants) ----
 // CAN A reads this every relevant frame, so updates must stay cheap. The legacy
@@ -180,7 +184,10 @@ constexpr uint8_t DAS_LC_REASON_DECODE_INVALID_VALUE = 4;
 // equivalent, so behaviour with no WebUI is unchanged.
 struct RuntimeConfig {
   bool fsdEnabled = true;
+  bool fsdActivationResendEnabled = false;
+  uint16_t fsdActivationResendMs = FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS;
   bool autoSpeedOffsetEnabled = true;
+  bool hiddenControlsUnlocked = false;
   bool cabinCameraDisableEnabled = false; // when enabled, write 0x3FD mux1 bit43 to 0
   uint8_t slewPctPerSec = 5;
   uint8_t lowSpeedMaxPctRaw = 200;    // = MAX_SPEED_OFFSET_PCT * OFFSET_PCT4_RAW_PER_PCT
@@ -228,14 +235,15 @@ static void normalizeDisableTelemetryConfig(RuntimeConfig& c) {
   // preferences somehow have both set; the WebUI also enforces this.
   if (c.disableTelemetryV2Enabled) c.disableTelemetryV1Enabled = false;
 
-  // This branch removes these WebUI-controlled features. Force them off so old
-  // Flash preferences cannot keep hidden behavior alive.
-  c.cabinCameraDisableEnabled = false;
-  c.dndEnabled = false;
-  c.nagKillerEnabled = false;
-  c.nagKillerDndEnabled = false;
-  c.nagKillerTest052Enabled = false;
-  c.nagKillerTest370Enabled = false;
+  // Keep hidden features off unless the password-gated WebUI unlock is enabled.
+  if (!c.hiddenControlsUnlocked) {
+    c.cabinCameraDisableEnabled = false;
+    c.dndEnabled = false;
+    c.nagKillerEnabled = false;
+    c.nagKillerDndEnabled = false;
+    c.nagKillerTest052Enabled = false;
+    c.nagKillerTest370Enabled = false;
+  }
 }
 
 static uint8_t normalizeCanBFilterMode(uint8_t mode) {
@@ -246,6 +254,12 @@ static uint8_t normalizeCanBFilterMode(uint8_t mode) {
 static uint8_t normalizeNagKillerMode(uint8_t mode) {
   if (mode == NAG_KILLER_MODE_DOC) return NAG_KILLER_MODE_DOC;
   return mode == NAG_KILLER_MODE_C ? NAG_KILLER_MODE_C : NAG_KILLER_MODE_B;
+}
+
+static uint16_t clampFsdActivationResendMs(uint16_t value) {
+  if (value < FSD_ACTIVATION_RESEND_MIN_PERIOD_MS) return FSD_ACTIVATION_RESEND_MIN_PERIOD_MS;
+  if (value > FSD_ACTIVATION_RESEND_MAX_PERIOD_MS) return FSD_ACTIVATION_RESEND_MAX_PERIOD_MS;
+  return value;
 }
 
 static uint16_t clampNagKillerBurstMs(uint16_t value) {
@@ -335,6 +349,11 @@ struct RuntimeStatus {
   uint32_t canbTxSchedExpired = 0;
   uint32_t canbTxSchedFail = 0;
   uint32_t canbTxSchedBudgetHit = 0;
+  uint8_t fsdActivationResendActive = 0;
+  uint8_t fsdActivationResendCachedMuxMask = 0;
+  uint16_t fsdActivationResendPeriodMs = 0;
+  uint32_t fsdActivationResendTxCount = 0;
+  uint32_t fsdActivationResendLastTxAgeMs = 0;
   uint32_t disableTelemetryTxCount = 0;
   uint32_t disableTelemetryTxFail = 0;
   uint32_t disableTelemetryLastId = 0;
@@ -647,6 +666,12 @@ static uint32_t batteryPreheatVcfrontLastRxMs = 0;
 static uint32_t dasCarLogLastRxMs = 0;
 static uint32_t dasLcHandsOnReasonPreviousMs = 0;
 static uint32_t dasLcHandsOnReasonLatestMs = 0;
+static can_frame fsdActivationResendFrames[3] = {};
+static bool fsdActivationResendHasFrame[3] = {};
+static bool fsdActivationResendPrevEnabled = false;
+static uint32_t fsdActivationResendNextMs = 0;
+static uint32_t fsdActivationResendLastTxMs = 0;
+static uint32_t fsdActivationResendTxCount = 0;
 static uint32_t nagKillerLastRxMs = 0;
 static uint32_t nagKillerLastTxMs = 0;
 static uint32_t nagKillerLastApMs = 0;
@@ -687,6 +712,8 @@ static uint16_t bms712TempValidMask = 0;
 
 static bool isRelevantCanId(uint32_t canId);
 static void serviceTwaiAlerts();
+static void serviceFsdActivationResend(const RuntimeConfig& cfg);
+static void cacheFsdActivationResendFrame(const can_frame& frame, uint8_t mux, const RuntimeConfig& cfg);
 static void serviceBatteryPreheat(const RuntimeConfig& cfg);
 static void handleBatteryPreheatFeedbackFrame(const can_frame& frame, uint8_t bus);
 static void handleBatteryPreheatBmsDiagFrame(const can_frame& frame, uint8_t bus);
@@ -1979,6 +2006,53 @@ static bool sendDisableTelemetryFrame(const can_frame& frame, uint8_t bus) {
   return sent;
 }
 
+static uint8_t fsdActivationResendCachedMuxMask() {
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < 3; ++i) {
+    if (fsdActivationResendHasFrame[i]) mask |= static_cast<uint8_t>(1U << i);
+  }
+  return mask;
+}
+
+static void cacheFsdActivationResendFrame(const can_frame& frame, uint8_t mux, const RuntimeConfig& cfg) {
+  if (!cfg.fsdEnabled || !cfg.fsdActivationResendEnabled) return;
+  if (frame.can_id != CAN_ID_AP_CONTROL || frame.can_dlc < 8 || mux > 2) return;
+  fsdActivationResendFrames[mux] = frame;
+  fsdActivationResendHasFrame[mux] = true;
+}
+
+static void serviceFsdActivationResend(const RuntimeConfig& cfg) {
+  const uint32_t now = millis();
+  const bool enabled = cfg.fsdEnabled &&
+                       cfg.fsdActivationResendEnabled &&
+                       cfg.fsdActivationResendMs > 0;
+  const uint16_t periodMs = clampFsdActivationResendMs(cfg.fsdActivationResendMs);
+
+  if (!enabled) {
+    fsdActivationResendPrevEnabled = false;
+    fsdActivationResendNextMs = 0;
+    g_status.fsdActivationResendActive = 0;
+    return;
+  }
+
+  if (!fsdActivationResendPrevEnabled) {
+    fsdActivationResendNextMs = now;
+  }
+  fsdActivationResendPrevEnabled = true;
+
+  g_status.fsdActivationResendActive = 1;
+  if ((int32_t)(now - fsdActivationResendNextMs) < 0) return;
+  fsdActivationResendNextMs = now + periodMs;
+
+  for (uint8_t i = 0; i < 3; ++i) {
+    if (!fsdActivationResendHasFrame[i]) continue;
+    if (twai_send(fsdActivationResendFrames[i])) {
+      fsdActivationResendTxCount++;
+      fsdActivationResendLastTxMs = now;
+    }
+  }
+}
+
 inline int8_t cabinCameraBit43Override(const RuntimeConfig& cfg, uint32_t now) {
   (void)now;
   return cfg.cabinCameraDisableEnabled ? 0 : -1;
@@ -2105,14 +2179,14 @@ struct HW3Handler {
         setBit(frame, 46, true);
         // 0x3FD mux 0 enables the FSD/AP bit and writes the current drive style.
         setSpeedProfileV12V13(frame, speedProfile);
-        twai_send(frame);
+        if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
       if (index == 1) {
         setBit(frame, 19, false);
         const int8_t cabinCameraOverride = cabinCameraBit43Override(cfg, millis());
         if (cabinCameraOverride >= 0) setBit(frame, 43, cabinCameraOverride != 0);
         // 0x3FD mux 1 keeps bit 19 clear and can optionally clear the cabin camera bit.
-        twai_send(frame);
+        if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
       if (index == 2 && cfg.fsdEnabled) {
         uint8_t speedOffsetRaw = unifiedSpeedCompensation.hasFusedSpeedLimit
@@ -2122,7 +2196,7 @@ struct HW3Handler {
         speedOffsetRaw = offsetSlewLimiter.apply(speedOffsetRaw, cfg.slewPctPerSec);
         g_status.offsetRaw = speedOffsetRaw;
         writeSpeedOffsetRaw(frame, speedOffsetRaw);
-        twai_send(frame);
+        if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
     }
   }
@@ -4077,12 +4151,22 @@ static void handleStatus() {
   }
   s.disableTelemetryLastTxAgeMs =
       disableTelemetryLastTxMs == 0 ? 0 : (now - disableTelemetryLastTxMs);
+  s.fsdActivationResendActive =
+      (c.fsdEnabled && c.fsdActivationResendEnabled && c.fsdActivationResendMs > 0) ? 1 : 0;
+  s.fsdActivationResendCachedMuxMask = fsdActivationResendCachedMuxMask();
+  s.fsdActivationResendPeriodMs = clampFsdActivationResendMs(c.fsdActivationResendMs);
+  s.fsdActivationResendTxCount = fsdActivationResendTxCount;
+  s.fsdActivationResendLastTxAgeMs =
+      fsdActivationResendLastTxMs == 0 ? 0 : (now - fsdActivationResendLastTxMs);
 
   String j;
-  j.reserve(11200);
+  j.reserve(11800);
   j += '{';
   j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
+  j += ",\"fsdActivationResendEnabled\":"; j += c.fsdActivationResendEnabled ? 1 : 0;
+  j += ",\"fsdActivationResendMs\":"; j += c.fsdActivationResendMs;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
+  j += ",\"hiddenControlsUnlocked\":"; j += c.hiddenControlsUnlocked ? 1 : 0;
   j += ",\"cabinCameraDisableEnabled\":"; j += c.cabinCameraDisableEnabled ? 1 : 0;
   j += ",\"disableTelemetryV1Enabled\":"; j += c.disableTelemetryV1Enabled ? 1 : 0;
   j += ",\"disableTelemetryV2Enabled\":"; j += c.disableTelemetryV2Enabled ? 1 : 0;
@@ -4193,6 +4277,11 @@ static void handleStatus() {
   j += ",\"canbTxSchedExpired\":";   j += s.canbTxSchedExpired;
   j += ",\"canbTxSchedFail\":";      j += s.canbTxSchedFail;
   j += ",\"canbTxSchedBudgetHit\":"; j += s.canbTxSchedBudgetHit;
+  j += ",\"fsdActivationResendActive\":"; j += s.fsdActivationResendActive;
+  j += ",\"fsdActivationResendCachedMuxMask\":"; j += s.fsdActivationResendCachedMuxMask;
+  j += ",\"fsdActivationResendPeriodMs\":"; j += s.fsdActivationResendPeriodMs;
+  j += ",\"fsdActivationResendTxCount\":"; j += s.fsdActivationResendTxCount;
+  j += ",\"fsdActivationResendLastTxAgeMs\":"; j += s.fsdActivationResendLastTxAgeMs;
   j += ",\"disableTelemetryTxCount\":"; j += s.disableTelemetryTxCount;
   j += ",\"disableTelemetryTxFail\":"; j += s.disableTelemetryTxFail;
   j += ",\"disableTelemetryLastId\":"; j += s.disableTelemetryLastId;
@@ -4346,7 +4435,20 @@ static void handleConfig() {
   const uint8_t oldCanBFilterMode = c.canbFilterMode;
 
   c.fsdEnabled              = argBool("fsdEnabled", c.fsdEnabled);
+  c.fsdActivationResendEnabled =
+      argBool("fsdActivationResendEnabled", c.fsdActivationResendEnabled);
+  c.fsdActivationResendMs =
+      clampFsdActivationResendMs(argU16("fsdActivationResendMs", c.fsdActivationResendMs));
   c.autoSpeedOffsetEnabled  = argBool("autoSpeedOffsetEnabled", c.autoSpeedOffsetEnabled);
+  const bool wantHiddenControlsUnlocked =
+      argBool("hiddenControlsUnlocked", c.hiddenControlsUnlocked);
+  if (!wantHiddenControlsUnlocked) {
+    c.hiddenControlsUnlocked = false;
+  } else if (!c.hiddenControlsUnlocked) {
+    c.hiddenControlsUnlocked =
+        server.hasArg("hiddenControlsPassword") &&
+        server.arg("hiddenControlsPassword") == HIDDEN_CONTROLS_PASSWORD;
+  }
   c.cabinCameraDisableEnabled = argBool("cabinCameraDisableEnabled", c.cabinCameraDisableEnabled);
   c.disableTelemetryV1Enabled = argBool("disableTelemetryV1Enabled", c.disableTelemetryV1Enabled);
   c.disableTelemetryV2Enabled = argBool("disableTelemetryV2Enabled", c.disableTelemetryV2Enabled);
@@ -4595,7 +4697,10 @@ static void loadConfigFromPrefs() {
   prefs.begin("t2can", true);
   RuntimeConfig c;  // defaults
   c.fsdEnabled             = prefs.getBool("fsdEnabled", c.fsdEnabled);
+  c.fsdActivationResendEnabled = prefs.getBool("fsdReOn", c.fsdActivationResendEnabled);
+  c.fsdActivationResendMs  = clampFsdActivationResendMs(prefs.getUShort("fsdReMs", c.fsdActivationResendMs));
   c.autoSpeedOffsetEnabled = prefs.getBool("autoOffset", c.autoSpeedOffsetEnabled);
+  c.hiddenControlsUnlocked = prefs.getBool("hidUnlock", c.hiddenControlsUnlocked);
   c.cabinCameraDisableEnabled = prefs.getBool("cabCamOff", c.cabinCameraDisableEnabled);
   c.slewPctPerSec          = prefs.getUChar("slewPct", c.slewPctPerSec);
   c.lowSpeedMaxPctRaw      = prefs.getUChar("lowRaw", c.lowSpeedMaxPctRaw);
@@ -4646,7 +4751,10 @@ static void saveConfigToPrefs() {
   RuntimeConfig c = configSnapshot();
   prefs.begin("t2can", false);
   prefs.putBool("fsdEnabled", c.fsdEnabled);
+  prefs.putBool("fsdReOn", c.fsdActivationResendEnabled);
+  prefs.putUShort("fsdReMs", clampFsdActivationResendMs(c.fsdActivationResendMs));
   prefs.putBool("autoOffset", c.autoSpeedOffsetEnabled);
+  prefs.putBool("hidUnlock", c.hiddenControlsUnlocked);
   prefs.putBool("cabCamOff", c.cabinCameraDisableEnabled);
   prefs.putUChar("slewPct", c.slewPctPerSec);
   prefs.putUChar("lowRaw", c.lowSpeedMaxPctRaw);
@@ -4991,6 +5099,8 @@ void loop() {
       twaiDrainedFrames++;
     }
   }
+
+  serviceFsdActivationResend(cfg);
 
 #ifdef ENABLE_CANB_MCP2515
   if (cfg.canbEnabled) {
