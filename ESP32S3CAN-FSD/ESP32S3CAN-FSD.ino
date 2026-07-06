@@ -160,12 +160,12 @@ constexpr uint16_t NAG_KILLER_TORQUE_RAW_MIN =
     NAG_KILLER_TORQUE_RAW_BASE - NAG_KILLER_TORQUE_MAX_CX100;
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_MAX =
     NAG_KILLER_TORQUE_RAW_BASE + NAG_KILLER_TORQUE_MAX_CX100;
-constexpr uint8_t NAG_DND_HANDS_PRIMARY_MIN = 2;
+constexpr uint8_t NAG_DND_HANDS_PRIMARY_MIN = 3;
 constexpr uint8_t NAG_DND_HANDS_PRIMARY_MAX = 6;
 constexpr uint8_t NAG_DND_HANDS_ESCALATED_MIN = 9;
 constexpr uint8_t NAG_DND_HANDS_ESCALATED_MAX = 10;
-constexpr uint8_t NAG_DND_ACTION_COUNT = 2;
-constexpr uint16_t NAG_DND_REARM_SAFE_MS = 2000;
+constexpr uint8_t NAG_DND_ACTION_COUNT = 1;
+constexpr uint16_t NAG_DND_REPEAT_MS = 500;
 constexpr uint8_t DAS_LC_REASON_DECODE_OK = 0;
 constexpr uint8_t DAS_LC_REASON_DECODE_NO_FRAME = 1;
 constexpr uint8_t DAS_LC_REASON_DECODE_BAD_DLC = 2;
@@ -200,7 +200,7 @@ struct RuntimeConfig {
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
   bool dndEnabled = false;             // continuous left scroll up/down on 0x3C2
   bool nagKillerEnabled = false;       // NAG A: 0x370 torque echo on PT CAN
-  bool nagKillerDndEnabled = false;    // 0x399 hands-on 2..6/9..10 triggers scroll DND actions
+  bool nagKillerDndEnabled = false;    // 0x399 hands-on 3..6/9..10 repeats scroll DND until 1/2
   uint8_t nagKillerMode = NAG_KILLER_MODE_A; // fixed A mode, 0x370 only
   uint16_t nagKillerAHo1NegMinCx100 = 150;
   uint16_t nagKillerAHo1NegMaxCx100 = 180;
@@ -651,7 +651,6 @@ static uint32_t nagKillerDndNextActionMs = 0;
 static uint32_t nagKillerDndLastTriggerMs = 0;
 static uint32_t nagKillerDndTriggerCount = 0;
 static bool nagKillerDndHandsRangeActive = false;
-static uint32_t nagKillerDndSafeSinceMs = 0;
 static uint32_t bms712TempLastRxMs = 0;
 static uint32_t bmsTempDecodedLastRxMs = 0;
 static int16_t bms712TempCx100[12] = {};
@@ -1355,25 +1354,17 @@ static void handleNagKillerContextFrame(const can_frame& frame, const RuntimeCon
     const bool handsStateTriggersDnd = nagKillerHandsStateTriggersDnd(handsOnState);
     if (!cfg.nagKillerDndEnabled) {
       nagKillerDndHandsRangeActive = false;
-      nagKillerDndSafeSinceMs = 0;
       clearNagKillerDndPendingActions();
     } else if (handsStateTriggersDnd) {
-      nagKillerDndSafeSinceMs = 0;
       if (!nagKillerDndHandsRangeActive) {
         triggerNagKillerDndBurst(now);
       }
       nagKillerDndHandsRangeActive = true;
+    } else if (handsOnState == 1 || handsOnState == 2) {
+      nagKillerDndHandsRangeActive = false;
+      clearNagKillerDndPendingActions();
     } else {
-      if (handsOnState <= 1) clearNagKillerDndPendingActions();
-      if (nagKillerDndHandsRangeActive) {
-        if (nagKillerDndSafeSinceMs == 0) nagKillerDndSafeSinceMs = now;
-        if ((now - nagKillerDndSafeSinceMs) >= NAG_DND_REARM_SAFE_MS) {
-          nagKillerDndHandsRangeActive = false;
-          nagKillerDndSafeSinceMs = 0;
-        }
-      } else {
-        nagKillerDndSafeSinceMs = 0;
-      }
+      nagKillerDndHandsRangeActive = false;
     }
 
     if (handsOnState != nagKillerHandsOnState) {
@@ -1740,7 +1731,7 @@ static bool decideNagKillerTorque(const RuntimeConfig& cfg, uint8_t& outB2, uint
       return false;
     }
     useNegative = nagKillerSteeringAngleDeg > 0.0f;
-    nagKillerRangeForState(cfg, nagKillerHandsOnState == 2, useNegative, minCx100, maxCx100);
+    nagKillerRangeForState(cfg, nagKillerHandsOnState != 1, useNegative, minCx100, maxCx100);
   }
 
   const uint16_t magCx100 = nagKillerRandomMagnitudeCx100(minCx100, maxCx100);
@@ -2079,8 +2070,6 @@ constexpr uint8_t REAR_FOG_PRIORITY_BODY = 2;
 constexpr uint8_t REAR_FOG_PRIORITY_REVERSE = 3;
 constexpr uint16_t HIGH_BEAM_STROBE_INTERVAL_MS = 45;
 constexpr uint16_t HIGH_BEAM_STROBE_RESEND_MS = 45;
-constexpr uint16_t OVERTAKE_LIGHT_FORCE_PERIOD_MS = HIGH_BEAM_STROBE_RESEND_MS;
-constexpr uint16_t OVERTAKE_LIGHT_ALWAYS_ON_PULL_WINDOW_MS = 3000;
 constexpr uint16_t REAR_FOG_STROBE_INTERVAL_MS = 135;
 // Hazard (0x3C2 bit3) is a momentary TOGGLE button: one click toggles hazards
 // on/off. Reverse = one click ON -> hold REVERSE_HAZARD_ON_MS (car flashes
@@ -2160,11 +2149,6 @@ static volatile bool highBeamStrobeOutputOn = false;
 static volatile uint8_t highBeamStrobePulsesRemaining = 0;
 static volatile uint32_t highBeamStrobeLastToggleMs = 0;
 static volatile uint32_t highBeamStrobeLastSendMs = 0;
-static volatile bool overtakeLightForceOutputOn = false;
-static volatile uint32_t overtakeLightForceLastTxMs = 0;
-static bool overtakeLightAlwaysOnLatched = false;
-static uint8_t overtakeLightAlwaysOnPullCount = 0;
-static uint32_t overtakeLightAlwaysOnLastPullMs = 0;
 static bool highBeamLastPullDown = false;
 static uint8_t highBeamPullCount = 0;
 static uint32_t highBeamLastPullMs = 0;
@@ -2231,7 +2215,6 @@ static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg);
 static void setCanBServiceMode(bool enabled);
 static void serviceCanBScheduledTx();
 static void serviceHighBeamStrobe(const RuntimeConfig& cfg);
-static void serviceOvertakeLightAlwaysOn(const RuntimeConfig& cfg);
 static void serviceReverseStrobe(const RuntimeConfig& cfg);
 static void serviceRearFogBrakeStrobe(const RuntimeConfig& cfg);
 static void serviceScrollGearShift(const RuntimeConfig& cfg);
@@ -2777,19 +2760,28 @@ static void handleDndHandsOnFrame(const can_frame& frame) {
 static void serviceNagKillerDndBurst(const RuntimeConfig& cfg) {
   if (!cfg.nagKillerDndEnabled) {
     nagKillerDndRemainingActions = 0;
+    nagKillerDndHandsRangeActive = false;
     g_status.nagKillerDndRemaining = 0;
     return;
   }
+
+  const uint32_t now = millis();
+  if (nagKillerDndHandsRangeActive &&
+      nagKillerDndRemainingActions == 0 &&
+      !dndActionActive &&
+      (nagKillerDndNextActionMs == 0 || (int32_t)(now - nagKillerDndNextActionMs) >= 0)) {
+    triggerNagKillerDndBurst(now);
+  }
+
   g_status.nagKillerDndRemaining = nagKillerDndRemainingActions;
   if (nagKillerDndRemainingActions == 0) return;
   if (dndActionActive) return;
 
-  const uint32_t now = millis();
   if (nagKillerDndNextActionMs != 0 && (int32_t)(now - nagKillerDndNextActionMs) < 0) return;
 
   if (startDndVolumeAction(cfg, false)) {
     nagKillerDndRemainingActions--;
-    nagKillerDndNextActionMs = now + (DND_SCROLL_STEP_MS * 5UL);
+    nagKillerDndNextActionMs = now + NAG_DND_REPEAT_MS;
     g_status.nagKillerDndRemaining = nagKillerDndRemainingActions;
   } else {
     nagKillerDndNextActionMs = now + DND_SCROLL_STEP_MS;
@@ -3174,51 +3166,6 @@ static void serviceHighBeamStrobe(const RuntimeConfig& cfg) {
   highBeamStrobeLastSendMs = now;
 }
 
-static void stopOvertakeLightForce(const RuntimeConfig& cfg, bool sendIdle) {
-  if (sendIdle && cfg.canbEnabled && canbReady) {
-    canb_send(highBeamFrame(STALK_STATUS_IDLE), CANB_TX_SRC_LIGHT);
-  }
-  overtakeLightForceOutputOn = false;
-  overtakeLightForceLastTxMs = 0;
-}
-
-static void serviceOvertakeLightAlwaysOn(const RuntimeConfig& cfg) {
-  const uint32_t now = millis();
-  const bool canbOk = cfg.canbEnabled && canbReady;
-  if (!cfg.overtakeLightAlwaysOnEnabled || !canbOk) {
-    if (overtakeLightForceOutputOn) {
-      stopOvertakeLightForce(cfg, true);
-    }
-    overtakeLightAlwaysOnLatched = false;
-    overtakeLightAlwaysOnPullCount = 0;
-    overtakeLightAlwaysOnLastPullMs = 0;
-    return;
-  }
-
-  if (!overtakeLightAlwaysOnLatched) {
-    if (overtakeLightForceOutputOn) stopOvertakeLightForce(cfg, true);
-    return;
-  }
-
-  if (highBeamStrobeActive || highBeamStrobeOutputOn) {
-    stopHighBeamStrobe(false);
-    overtakeLightForceOutputOn = false;
-    overtakeLightForceLastTxMs = 0;
-  }
-
-  if (overtakeLightForceOutputOn &&
-      overtakeLightForceLastTxMs != 0 &&
-      (now - overtakeLightForceLastTxMs) < OVERTAKE_LIGHT_FORCE_PERIOD_MS) {
-    return;
-  }
-
-  if (canbScheduleTx(highBeamFrame(STALK_STATUS_PULL), CANB_TX_SRC_LIGHT,
-                     CANB_TX_PRIO_MED, CANB_TX_TTL_FAST_MS, true)) {
-    overtakeLightForceOutputOn = true;
-    overtakeLightForceLastTxMs = now;
-  }
-}
-
 static void serviceReverseStrobe(const RuntimeConfig& cfg) {
   if (!canbReady) return;
   if (!cfg.canbEnabled) {
@@ -3497,7 +3444,6 @@ static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg) {
     const bool pullDown = stalkStatus == STALK_STATUS_PULL;
     const uint32_t now = canbLastStwActnRqMs;
     const bool pullEdge = pullDown && !highBeamLastPullDown;
-    bool pullEdgeConsumed = false;
 
     if (!cfg.highBeamStrobeEnabled) {
       highBeamPullCount = 0;
@@ -3512,49 +3458,8 @@ static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg) {
       if (highBeamPullCount >= 2) {
         highBeamPullCount = 0;
         highBeamLastPullMs = 0;
-        overtakeLightAlwaysOnLatched = false;
-        overtakeLightAlwaysOnPullCount = 0;
-        overtakeLightAlwaysOnLastPullMs = 0;
-        stopOvertakeLightForce(cfg, true);
         startHighBeamStrobe();
-        pullEdgeConsumed = true;
       }
-    }
-
-    if (cfg.overtakeLightAlwaysOnEnabled && cfg.canbEnabled && canbReady) {
-      if (overtakeLightAlwaysOnPullCount != 0 &&
-          overtakeLightAlwaysOnLastPullMs != 0 &&
-          (now - overtakeLightAlwaysOnLastPullMs) > OVERTAKE_LIGHT_ALWAYS_ON_PULL_WINDOW_MS) {
-        overtakeLightAlwaysOnPullCount = 0;
-      }
-      if (!pullEdgeConsumed && pullEdge) {
-        if (overtakeLightAlwaysOnLatched) {
-          overtakeLightAlwaysOnLatched = false;
-          stopOvertakeLightForce(cfg, true);
-          overtakeLightAlwaysOnPullCount = 0;
-          overtakeLightAlwaysOnLastPullMs = 0;
-          pullEdgeConsumed = true;
-        } else {
-          const uint32_t interval =
-              overtakeLightAlwaysOnLastPullMs == 0 ? 0 : (now - overtakeLightAlwaysOnLastPullMs);
-          if (overtakeLightAlwaysOnPullCount == 1 &&
-              interval > HIGH_BEAM_DOUBLE_PULL_WINDOW_MS &&
-              interval <= OVERTAKE_LIGHT_ALWAYS_ON_PULL_WINDOW_MS) {
-            overtakeLightAlwaysOnLatched = true;
-            overtakeLightAlwaysOnPullCount = 0;
-            overtakeLightAlwaysOnLastPullMs = 0;
-            overtakeLightForceLastTxMs = 0;
-            if (highBeamStrobeActive || highBeamStrobeOutputOn) stopHighBeamStrobe(false);
-          } else {
-            overtakeLightAlwaysOnPullCount = 1;
-            overtakeLightAlwaysOnLastPullMs = now;
-          }
-          pullEdgeConsumed = true;
-        }
-      }
-    } else {
-      overtakeLightAlwaysOnPullCount = 0;
-      overtakeLightAlwaysOnLastPullMs = 0;
     }
 
     highBeamLastPullDown = pullDown;
@@ -3939,7 +3844,6 @@ static void handleStatus() {
   j += ",\"canbHardwareFilterEnabled\":0";
 #endif
   j += ",\"highBeamStrobeEnabled\":"; j += c.highBeamStrobeEnabled ? 1 : 0;
-  j += ",\"overtakeLightAlwaysOnEnabled\":"; j += c.overtakeLightAlwaysOnEnabled ? 1 : 0;
   j += ",\"rearFogBrakeStrobeEnabled\":"; j += c.rearFogBrakeStrobeEnabled ? 1 : 0;
   j += ",\"reverseStrobeEnabled\":"; j += c.reverseStrobeEnabled ? 1 : 0;
   j += ",\"batteryPreheatEnabled\":"; j += c.batteryPreheatEnabled ? 1 : 0;
@@ -4186,8 +4090,6 @@ static void handleConfig() {
     c.canbFilterMode = argBool("canbFilterEnabled", c.canbFilterMode != CANB_FILTER_ALL) ? CANB_FILTER_FEATURE : CANB_FILTER_ALL;
   }
   c.highBeamStrobeEnabled   = argBool("highBeamStrobeEnabled", c.highBeamStrobeEnabled);
-  c.overtakeLightAlwaysOnEnabled =
-      argBool("overtakeLightAlwaysOnEnabled", c.overtakeLightAlwaysOnEnabled);
   c.rearFogBrakeStrobeEnabled = argBool("rearFogBrakeStrobeEnabled", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled    = argBool("reverseStrobeEnabled", c.reverseStrobeEnabled);
   c.batteryPreheatEnabled   = argBool("batteryPreheatEnabled", c.batteryPreheatEnabled);
@@ -4430,7 +4332,6 @@ static void loadConfigFromPrefs() {
                                   prefs.getBool("canbFilt", false) ? CANB_FILTER_FEATURE : c.canbFilterMode);
   c.canbFilterMode         = normalizeCanBFilterMode(c.canbFilterMode);
   c.highBeamStrobeEnabled  = prefs.getBool("hbStrobe", c.highBeamStrobeEnabled);
-  c.overtakeLightAlwaysOnEnabled = prefs.getBool("passAlways", c.overtakeLightAlwaysOnEnabled);
   c.rearFogBrakeStrobeEnabled = prefs.getBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled   = prefs.getBool("revStrobe", c.reverseStrobeEnabled);
   c.batteryPreheatEnabled  = prefs.getBool("batHeat", c.batteryPreheatEnabled);
@@ -4476,7 +4377,6 @@ static void saveConfigToPrefs() {
   prefs.putUChar("canbFiltMode", c.canbFilterMode);
   prefs.putBool("canbFilt", c.canbFilterMode != CANB_FILTER_ALL);
   prefs.putBool("hbStrobe", c.highBeamStrobeEnabled);
-  prefs.putBool("passAlways", c.overtakeLightAlwaysOnEnabled);
   prefs.putBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   prefs.putBool("revStrobe", c.reverseStrobeEnabled);
   prefs.putBool("batHeat", c.batteryPreheatEnabled);
@@ -4802,7 +4702,6 @@ void loop() {
     serviceCanBScheduledTx();
   }
   serviceHighBeamStrobe(cfg);
-  serviceOvertakeLightAlwaysOn(cfg);
   serviceReverseStrobe(cfg);
   serviceRearFogBrakeStrobe(cfg);
   serviceScrollGearShift(cfg);

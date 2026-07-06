@@ -180,7 +180,7 @@ This feature is experimental and defaults off. On T-2CAN it targets PT CAN on `b
 - WebUI has two independent range sets:
   - handsOnState `1`: `- Min / - Max / + Min / + Max`.
   - handsOnState `2`: `- Min / - Max / + Min / + Max`.
-  - other handsOn states use the handsOnState `1` range.
+  - other handsOn states use the handsOnState `2` range.
 
 ### Lock Deep Sleep
 
@@ -456,7 +456,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 - WebUI 有两套独立范围：
   - handsOnState `1`：`- Min / - Max / + Min / + Max`。
   - handsOnState `2`：`- Min / - Max / + Min / + Max`。
-  - 其他 handsOnState 按 handsOnState `1` 范围处理。
+  - 其他 handsOnState 按 handsOnState `2` 范围处理。
 
 ### 锁车 Deep Sleep
 
