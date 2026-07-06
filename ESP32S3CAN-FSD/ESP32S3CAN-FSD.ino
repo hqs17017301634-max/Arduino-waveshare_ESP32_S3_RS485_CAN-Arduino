@@ -195,7 +195,6 @@ struct RuntimeConfig {
   bool canbServiceModeEnabled = false;
   uint8_t canbFilterMode = CANB_FILTER_FEATURE; // 0=capture/debug all, 1=current feature IDs
   bool highBeamStrobeEnabled = false; // arms double-pull flash-to-pass trigger
-  bool overtakeLightAlwaysOnEnabled = false; // unconditional 0x249 flash-to-pass PULL
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
@@ -1979,7 +1978,9 @@ HW3Handler handler;
 // ============================================================================
 #ifdef ENABLE_CANB_MCP2515
 
-static MCP2515 canb(MCP2515_CS);
+// Pass the configured SPI instance explicitly so the MCP2515 constructor does
+// not call a default SPI.begin() before setupCanB() applies the LILYGO pins.
+static MCP2515 canb(MCP2515_CS, 10000000, &SPI);
 static bool canbReady = false;
 static uint8_t canbHardwareFilterMode = CANB_FILTER_ALL;
 static uint32_t canbRxCount = 0;
@@ -2241,10 +2242,13 @@ static void serviceDndVolumeAuto(const RuntimeConfig& cfg);
 static void handleVcleftSwitchFrame(const can_frame& frame, const RuntimeConfig& cfg, bool cacheHazardFrame);
 
 static void setupCanB() {
+  Serial.println("[CANB] setup start");
   canbReady = false;
+  Serial.println("[CANB] pinMode INT");
   pinMode(MCP2515_INT, INPUT_PULLUP);
 
   // Hard reset the MCP2515 via its RST line: high / low / high.
+  Serial.println("[CANB] reset pins");
   pinMode(MCP2515_RST, OUTPUT);
   digitalWrite(MCP2515_RST, HIGH);
   delay(10);
@@ -2253,17 +2257,36 @@ static void setupCanB() {
   digitalWrite(MCP2515_RST, HIGH);
   delay(10);
 
+  Serial.println("[CANB] SPI.begin");
   SPI.begin(MCP2515_SCK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
+  Serial.println("[CANB] SPI.begin done");
 
   // reset()/setNormalMode() return types vary across library versions, so we
   // call them as statements and only gate on setBitrate(), which is the
   // meaningful failure point. A failure here just leaves canbReady = false; it
   // must never block or disturb CAN A / the FSD pipeline.
+  Serial.println("[CANB] canb.reset");
   canb.reset();
   delay(10);
-  if (canb.setBitrate(CAN_500KBPS, MCP2515_CLOCK) != MCP2515::ERROR_OK) return;
-  if (!applyCanBFilters(configSnapshot().canbFilterMode)) return;
+  Serial.println("[CANB] setBitrate");
+  if (canb.setBitrate(CAN_500KBPS, MCP2515_CLOCK) != MCP2515::ERROR_OK) {
+    Serial.println("[CANB] setBitrate failed");
+    return;
+  }
+  Serial.println("[CANB] apply filters");
+  if (!applyCanBFilters(configSnapshot().canbFilterMode)) {
+    Serial.println("[CANB] apply filters failed");
+    return;
+  }
   canbReady = true;
+  Serial.println("[CANB] ready");
+}
+
+static void canBInitTask(void*) {
+  Serial.println("[CANB] init task begin");
+  setupCanB();
+  Serial.printf("[CANB] init task done ready=%u\n", canbReady ? 1U : 0U);
+  vTaskDelete(nullptr);
 }
 
 static bool applyCanBFilters(uint8_t mode) {
@@ -4475,11 +4498,23 @@ static void saveConfigToPrefs() {
 }
 
 static void setupLightWebUi() {
+  Serial.println("[WEBUI] setup begin");
   setupRecorderBuffer();
-  WiFi.mode(WIFI_AP);
+  Serial.printf("[WEBUI] recorder cap=%lu mem=%u psram=%u\n",
+                static_cast<unsigned long>(recCapacity),
+                static_cast<unsigned>(recBufferMem),
+                recPsramReady ? 1U : 0U);
+  const bool modeOk = WiFi.mode(WIFI_AP);
+  Serial.printf("[WEBUI] WiFi.mode(WIFI_AP)=%d\n", modeOk ? 1 : 0);
   // SoftAP IP / gateway = 100.100.1.1 (subnet 255.255.255.0). Must precede softAP().
-  WiFi.softAPConfig(WEBUI_AP_IP, WEBUI_AP_IP, WEBUI_AP_NETMASK);
-  WiFi.softAP(WEBUI_AP_SSID, WEBUI_AP_PASS);
+  const bool configOk = WiFi.softAPConfig(WEBUI_AP_IP, WEBUI_AP_IP, WEBUI_AP_NETMASK);
+  Serial.printf("[WEBUI] softAPConfig=%d ip=%s\n", configOk ? 1 : 0, WEBUI_AP_IP.toString().c_str());
+  const bool apOk = WiFi.softAP(WEBUI_AP_SSID, WEBUI_AP_PASS);
+  Serial.printf("[WEBUI] softAP=%d ssid=%s ip=%s mac=%s\n",
+                apOk ? 1 : 0,
+                WiFi.softAPSSID().c_str(),
+                WiFi.softAPIP().toString().c_str(),
+                WiFi.softAPmacAddress().c_str());
   configureSoftApDhcpDns();
   dnsServer.start(WEBUI_DNS_PORT, "*", WEBUI_AP_IP);
   server.on("/", HTTP_ANY, handleRoot);
@@ -4496,6 +4531,7 @@ static void setupLightWebUi() {
   server.on("/reboot", HTTP_POST, handleReboot);
   server.onNotFound(handleCaptivePortalOrNotFound);
   server.begin();
+  Serial.println("[WEBUI] http server begin");
 }
 
 // Dedicated WebUI task (pinned to core 0, low priority). The CAN main loop on
@@ -4670,16 +4706,28 @@ static void handleTwaiFrame(can_frame& frame, const RuntimeConfig& cfg) {
 }
 
 void setup() {
+  Serial.begin(115200);
   delay(500);
+  Serial.println();
+  Serial.println("[BOOT] NAG-2CAN starting");
+  Serial.printf("[BOOT] CPU=%uMHz flash=%u psram=%u\n",
+                static_cast<unsigned>(getCpuFrequencyMhz()),
+                static_cast<unsigned>(ESP.getFlashChipSize()),
+                psramFound() ? 1U : 0U);
 
-  (void)esp_register_freertos_idle_hook_for_cpu(diagCpu0IdleHook, 0);
-  (void)esp_register_freertos_idle_hook_for_cpu(diagCpu1IdleHook, 1);
+  Serial.println("[BOOT] register idle hooks");
+  esp_err_t hook0 = esp_register_freertos_idle_hook_for_cpu(diagCpu0IdleHook, 0);
+  esp_err_t hook1 = esp_register_freertos_idle_hook_for_cpu(diagCpu1IdleHook, 1);
+  Serial.printf("[BOOT] idle hooks result cpu0=%d cpu1=%d\n", static_cast<int>(hook0), static_cast<int>(hook1));
 
 #ifdef ENABLE_LIGHT_WEBUI
+  Serial.println("[BOOT] loadConfigFromPrefs begin");
   loadConfigFromPrefs();
+  Serial.println("[BOOT] loadConfigFromPrefs done");
 #endif
 
   // Configure TWAI (CAN) peripheral at 500 kbps
+  Serial.println("[BOOT] TWAI install begin");
   twai_general_config_t g_config_twai = TWAI_GENERAL_CONFIG_DEFAULT(
     static_cast<gpio_num_t>(TWAI_TX_PIN),
     static_cast<gpio_num_t>(TWAI_RX_PIN),
@@ -4689,17 +4737,27 @@ void setup() {
   twai_timing_config_t  t_config = TWAI_TIMING_CONFIG_500KBITS();
   twai_filter_config_t  f_config = { CAN_ACCEPT_CODE, CAN_ACCEPT_MASK, true };
 
-  twai_driver_install(&g_config_twai, &t_config, &f_config);
-  twai_start();
-  twai_reconfigure_alerts(TWAI_ALERT_MASK, nullptr);
+  esp_err_t twaiInstall = twai_driver_install(&g_config_twai, &t_config, &f_config);
+  esp_err_t twaiStart = twai_start();
+  esp_err_t twaiAlerts = twai_reconfigure_alerts(TWAI_ALERT_MASK, nullptr);
+  Serial.printf("[BOOT] TWAI install=%d start=%d alerts=%d\n",
+                static_cast<int>(twaiInstall),
+                static_cast<int>(twaiStart),
+                static_cast<int>(twaiAlerts));
 
-#ifdef ENABLE_CANB_MCP2515
-  setupCanB();
-#endif
 
 #ifdef ENABLE_LIGHT_WEBUI
+  Serial.println("[BOOT] ENABLE_LIGHT_WEBUI=1");
   setupLightWebUi();
-  xTaskCreatePinnedToCore(webTask, "web", 4096, nullptr, 1, nullptr, 0);
+  BaseType_t webTaskOk = xTaskCreatePinnedToCore(webTask, "web", 4096, nullptr, 1, nullptr, 0);
+  Serial.printf("[WEBUI] webTask create=%ld\n", static_cast<long>(webTaskOk));
+#else
+  Serial.println("[BOOT] ENABLE_LIGHT_WEBUI=0");
+#endif
+
+#ifdef ENABLE_CANB_MCP2515
+  BaseType_t canbTaskOk = xTaskCreatePinnedToCore(canBInitTask, "canbinit", 4096, nullptr, 1, nullptr, 1);
+  Serial.printf("[CANB] init task create=%ld\n", static_cast<long>(canbTaskOk));
 #endif
 }
 

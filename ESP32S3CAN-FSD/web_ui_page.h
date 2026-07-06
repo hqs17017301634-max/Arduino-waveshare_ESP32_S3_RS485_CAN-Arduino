@@ -1,4 +1,4 @@
-// Light WebUI page served by /. Kept in a separate header so the PlatformIO
+﻿// Light WebUI page served by /. Kept in a separate header so the PlatformIO
 // .ino prototype generator never has to parse the JavaScript braces.
 #pragma once
 
@@ -33,7 +33,6 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <h1>T-2CAN FSD 运行参数</h1>
 
 <div class="card bar">
-<button class="alt" onclick="saveConfig()">保存</button>
 <button class="warn" onclick="rebootBoard()">重启</button>
 <button class="ghost" id="themeBtn" onclick="toggleTheme()">日间</button>
 <label class="pageSwitch">诊断信息页<input type="checkbox" id="diagPageSwitch" onchange="setDiagPage(this.checked)"></label>
@@ -44,8 +43,6 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 
 <div class="card wide">
 <h2>通道定义</h2>
-<p class="hint">官方 LILYGO T-2CAN V1.0：物理 CANA = MCP2515/SPI；物理 CANB = ESP32-S3 原生 TWAI。当前固件 CSV：bus=1/TWAI/物理CANB，bus=2/MCP2515/物理CANA。</p>
-<p class="hint">车机连接本热点后手动打开 http://100.100.1.1；固件会对 connman.vn.cloud.tesla.cn 和 www.tesla.cn 联网检测做本地在线应答。</p>
 <div class="kv"><span>bus=1</span><span>TWAI / physical CANB / GPIO7,6</span></div>
 <div class="kv"><span>bus=2</span><span>MCP2515 / physical CANA / SPI + INT8</span></div>
 </div>
@@ -68,26 +65,19 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="card">
 <h2>灯光 / 车身</h2>
 <label>高光爆闪启用<input type="checkbox" id="highBeamStrobeEnabled"></label>
-<p class="hint">bus=2/MCP2515/物理CANA，0x249，1秒内下拉两次触发 8 次，45ms ON / 45ms OFF，优先级最高，结束强制 idle。</p>
-<label>超车灯常ON<input type="checkbox" id="overtakeLightAlwaysOnEnabled"></label>
-<p class="hint">打开后启用拨杆手势：两下开启常ON，两下必须间隔超过1秒且3秒内完成；常ON时一下取消。1秒内两下优先触发爆闪；常ON输出约 45ms 一帧 0x249 PULL。</p>
 <label>后雾灯刹车爆闪启用<input type="checkbox" id="rearFogBrakeStrobeEnabled"></label>
-<p class="hint">缓减速触发 3 次，急减速或车身刹车灯触发 6 次，输出使用 0x273 后雾灯位。</p>
 <label>倒挡双闪雾灯启用<input type="checkbox" id="reverseStrobeEnabled"></label>
-<p class="hint">R 档触发 hazard + 后雾灯；滚轮换挡启用时，踩刹车+右滚轮后滚也可按 R 意图触发，右滚轮前滚按 D 意图取消。</p>
 </div>
 
 <div class="card">
 <h2>免打扰</h2>
 <label>持续滚轮免打扰<input type="checkbox" id="dndEnabled"></label>
 <label>Nag-Killer联动滚轮免打扰<input type="checkbox" id="nagKillerDndEnabled"></label>
-<p class="hint">持续滚轮：FSD/AP 激活后随机 1-5 秒自动音量加减恢复。Nag-Killer联动：识别 0x399 hands-on state 2..6 或 9..10 后触发 2 轮；回到 0/1 会停止待触发动作，需稳定离开约2秒后才允许再次触发。两者都复用 bus=2/MCP2515/物理CANA 最新 0x3C2 mux1 滚轮帧，每步 100ms，默认关闭。</p>
 </div>
 
 <div class="card">
 <h2>Nag-Killer 扭矩</h2>
 <label>Nag-Killer扭矩总开关<input type="checkbox" id="nagKillerEnabled"></label>
-<p class="hint">持续滚轮免打扰、Nag-Killer联动滚轮免打扰、NAG A 扭矩任一开启时，固件会自动在 bus=1/TWAI/物理CANB 的 0x3FD mux1 清座舱摄像头 bit43。</p>
 <h3>NAG A：HandsOn 1 范围 Nm</h3>
 <label>负向 Min<span class="signed"><b>-</b><input type="number" id="nagKillerAHo1NegMinNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
 <label>负向 Max<span class="signed"><b>-</b><input type="number" id="nagKillerAHo1NegMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
@@ -98,17 +88,13 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <label>负向 Max<span class="signed"><b>-</b><input type="number" id="nagKillerAHo2NegMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
 <label>正向 Min<span class="signed"><b>+</b><input type="number" id="nagKillerAHo2PosMinNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
 <label>正向 Max<span class="signed"><b>+</b><input type="number" id="nagKillerAHo2PosMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
-<p class="hint">默认关闭。NAG A 只处理 PT CAN 上的 0x370：收到原车 0x370 后复制原帧，只改扭矩字段、counter 和 checksum，再回发；当前版本不主动写 data[4] handsOn 位。FSD/AP active 后前 8 秒使用正向范围随机值，默认 1.50..1.80Nm；之后 angle&gt;0 用负向范围，angle&lt;=0 用正向范围。handsOnState=1 使用 HandsOn 1 范围，handsOnState=2 使用 HandsOn 2 范围，其它按 HandsOn 1 处理。最大绝对扭矩 1.80Nm。</p>
 </div>
 
 <div class="card">
 <h2>滚轮换挡 / 预热 / MCP2515</h2>
 <label>滚轮换挡启用<input type="checkbox" id="scrollGearInjectEnabled"></label>
-<p class="hint">踩刹车 + 右滚轮，bus=2/MCP2515/物理CANA 发送 0x229，默认关闭。</p>
 <label>电池预热启用<input type="checkbox" id="batteryPreheatEnabled"></label>
-<p class="hint">bus=2/MCP2515/物理CANA 每 500ms 固定发送 0x082：AF 50 A8 80 FF 03 00 80；目标 42.0°C。平均温度到 42°C 连续10秒、最高温到45°C、SOC已知且低于5%、运行15分钟、开始充电或手动关闭时停止ON并补发3帧OFF。</p>
 <label>bus=1/TWAI/物理CANB 只收不发<input type="checkbox" id="can1ReceiveOnly"></label>
-<p class="hint">开启后只屏蔽 TWAI 发送；MCP2515/物理CANA 上的灯光、滚轮和 0x082 不受这个开关阻断。</p>
 <h3>MCP2515 / 物理 CANA</h3>
 <label>启用<input type="checkbox" id="canbEnabled"></label>
 <label>维修模式 0x339<input type="checkbox" id="canbServiceModeEnabled"></label>
@@ -117,7 +103,6 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 
 <div class="card">
 <h2>CAN 抓包</h2>
-<p class="hint">ID 留空=不做录制层过滤；bus=1/TWAI 仍只记录固件关注的 FSD/底盘 ID，bus=2/MCP2515 是否全量取决于上方硬件过滤模式。多个 ID 用逗号分隔，例如 229,082,273。CSV 会输出 controller 和 physical 两列。</p>
 <input type="text" id="recIds" value="">
 <div>
 <button onclick="startRec()">开始抓包</button>
@@ -146,7 +131,6 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 
 <div class="card">
 <h2>开发板诊断</h2>
-<p class="hint">CPU0主要跑Web/DNS；CAN主循环主要跑CPU1。CPU0/CPU1占用为按空闲循环校准的轻量估算；loop CPU%已扣除TWAI等待时间；loop最大耗时超过5ms、TX最大耗时超过2ms、TWAI missed/overrun新增、MCP2515 overflow新增，说明实时性需要重点看。</p>
 <div class="kv"><span>窗口ms / CPU MHz</span><span><b id="diagWindowMs">-</b> / <b id="cpuMhz">-</b></span></div>
 <div class="kv"><span>CPU0 / CPU1 占用估算</span><span><b id="cpu0Pct">-</b> / <b id="cpu1Pct">-</b></span></div>
 <div class="kv"><span>loop Hz / CPU%</span><span><b id="loopHz">-</b> / <b id="cpuPct">-</b></span></div>
@@ -180,7 +164,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>MCP2515 TX慢 / drain最大</span><span><b id="canbTxSlowCount">-</b> / <b id="canbDrainMaxUs">-</b></span></div>
 <div class="kv"><span>MCP2515 drain最大帧数</span><span id="canbDrainMaxFrames">-</span></div>
 <div class="kv"><span>MCP2515 TX调用每轮 上次/窗口最大/历史最大</span><span><b id="canbTxLoopLast">-</b> / <b id="canbTxLoopMax">-</b> / <b id="canbTxLoopMaxEver">-</b></span></div>
-<div class="kv"><span>MCP2515 TX调用来源 NAG/预热/灯光</span><span><b id="canbTxSrcNag">-</b> / <b id="canbTxSrcBattery">-</b> / <b id="canbTxSrcLight">-</b></span></div>
+<div class="kv"><span>MCP2515 TX调用来源 预热/灯光</span><span><b id="canbTxSrcBattery">-</b> / <b id="canbTxSrcLight">-</b></span></div>
 <div class="kv"><span>MCP2515 TX调用来源 滚轮/换挡/后雾/倒挡/0x339/其他</span><span><b id="canbTxSrcDnd">-</b> / <b id="canbTxSrcScrollGear">-</b> / <b id="canbTxSrcRearFog">-</b> / <b id="canbTxSrcReverse">-</b> / <b id="canbTxSrcService">-</b> / <b id="canbTxSrcOther">-</b></span></div>
 <div class="kv"><span>MCP2515 TX队列 当前/最大</span><span><b id="canbTxQueueDepth">-</b> / <b id="canbTxQueueMaxDepth">-</b></span></div>
 <div class="kv"><span>MCP2515 TX调度 发出/丢弃/过期/失败/触顶</span><span><b id="canbTxSchedTx">-</b> / <b id="canbTxSchedDrop">-</b> / <b id="canbTxSchedExpired">-</b> / <b id="canbTxSchedFail">-</b> / <b id="canbTxSchedBudgetHit">-</b></span></div>
@@ -222,24 +206,11 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 </div>
 
 <div class="card">
-<h2>免打扰 / Nag-Killer</h2>
-<h3>免打扰</h3>
+<h2>免打扰</h2>
 <div class="kv"><span>hands-on 0x399 / 警告</span><span><b id="dndHandsOnState">-</b> / <b id="dndWarningActive">-</b></span></div>
 <div class="kv"><span>动作 / 类型 / 阻止</span><span><b id="dndActionActive">-</b> / <b id="dndActionType">-</b> / <b id="dndBlocked">-</b></span></div>
 <div class="kv"><span>DND TX / 触发距今ms</span><span><b id="dndTxCount">-</b> / <b id="dndLastTriggerAgeMs">-</b></span></div>
 <div class="kv"><span>0x3C2滚轮缓存距今ms</span><span id="dndScrollCacheAgeMs">-</span></div>
-<h3>Nag-Killer 扭矩</h3>
-<div class="kv"><span>模式 / 目标ID / 阻止</span><span><b id="nagKillerModeText">-</b> / <b id="nagKillerTargetId">-</b> / <b id="nagKillerBlocked">-</b></span></div>
-<div class="kv"><span>激活 / burst / setHo</span><span><b id="nagKillerActive">-</b> / <b id="nagKillerBurstActive">-</b> / <b id="nagKillerSetHandsOn">-</b></span></div>
-<div class="kv"><span>RX / TX / fail</span><span><b id="nagKillerRxCount">-</b> / <b id="nagKillerTxCount">-</b> / <b id="nagKillerTxFail">-</b></span></div>
-<div class="kv"><span>RX距今 / TX距今ms</span><span><b id="nagKillerLastRxAgeMs">-</b> / <b id="nagKillerLastTxAgeMs">-</b></span></div>
-<div class="kv"><span>AP / hands-on / 目标Ho</span><span><b id="nagKillerApState">-</b> / <b id="nagKillerHandsOnState">-</b> / <b id="nagKillerTargetHandsOn">-</b></span></div>
-<div class="kv"><span>DAS_carLog 0x5D9 / Reason解码</span><span><b id="dasLcHandsOnReasonSeen">-</b> / <b id="dasLcHandsOnReasonDlc">-</b> / <b id="dasLcHandsOnReasonDecode">-</b></span></div>
-<div class="kv"><span>DAS_LC_handsOnReason 前一次 / Previous</span><span><b id="dasLcHandsOnReasonPrevious">-</b> / <b id="dasLcHandsOnReasonPreviousAgeMs">-</b></span></div>
-<div class="kv"><span>DAS_LC_handsOnReason 最近一次 / Latest</span><span><b id="dasLcHandsOnReasonLatest">-</b> / <b id="dasLcHandsOnReasonLatestAgeMs">-</b></span></div>
-<div class="kv"><span>实车扭矩 / 注入扭矩</span><span><b id="nagKillerRealTorqueCx100">-</b> / <b id="nagKillerLastTorqueCx100">-</b></span></div>
-<div class="kv"><span>方向盘角度 / AP年龄 / 转角年龄</span><span><b id="nagKillerSteeringDegCx10">-</b> / <b id="nagKillerApAgeMs">-</b> / <b id="nagKillerSteeringAgeMs">-</b></span></div>
-<div class="kv"><span>NAG联动滚轮 设定/剩余/累计/距今ms</span><span><b id="nagKillerDndActionCount">-</b> / <b id="nagKillerDndRemaining">-</b> / <b id="nagKillerDndTriggerCount">-</b> / <b id="nagKillerDndLastTriggerAgeMs">-</b></span></div>
 </div>
 
 <div class="card">
@@ -258,14 +229,14 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 </div>
 
 <script>
-let pollTimer=null,recTimer=null,loaded=false,lastDiag=null;
+let pollTimer=null,recTimer=null,loaded=false,lastDiag=null,autoSaveTimer=null,autoSaveBusy=false,autoSaveQueued=false;
 function getStoredTheme(){try{return localStorage.getItem("theme")||""}catch(e){return ""}}
 function setStoredTheme(t){try{localStorage.setItem("theme",t)}catch(e){}}
 function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")return t;const h=(new Date()).getHours();return h>=7&&h<19?"light":"dark"}
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerAHo1NegMinNm","nagKillerAHo1NegMaxNm","nagKillerAHo1PosMinNm","nagKillerAHo1PosMaxNm","nagKillerAHo2NegMinNm","nagKillerAHo2NegMaxNm","nagKillerAHo2PosMinNm","nagKillerAHo2PosMaxNm","scrollGearInjectEnabled","can1ReceiveOnly"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerAHo1NegMinNm","nagKillerAHo1NegMaxNm","nagKillerAHo1PosMinNm","nagKillerAHo1PosMaxNm","nagKillerAHo2NegMinNm","nagKillerAHo2NegMaxNm","nagKillerAHo2PosMinNm","nagKillerAHo2PosMaxNm","scrollGearInjectEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
@@ -442,8 +413,10 @@ lastDiag=j;
 function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&e.tagName!=="INPUT"&&e.tagName!=="SELECT")e.textContent=fmtStat(k,j[k])})}
 function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
-function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);p.set(k,getVal(e))});return p}
-function saveConfig(){fetch("/config",{method:"POST",body:body()}).then(()=>fetch("/save",{method:"POST"})).then(async r=>{showResult(await r.text());pollStatus()})}
+function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);if(e)p.set(k,getVal(e))});return p}
+function scheduleAutoSave(){if(!loaded)return;clearTimeout(autoSaveTimer);showResult("正在自动保存...");autoSaveTimer=setTimeout(saveConfig,700)}
+function bindAutoSave(){cfgIds.forEach(k=>{const e=document.getElementById(k);if(!e)return;const ev=(e.type==="checkbox"||e.tagName==="SELECT")?"change":"input";e.addEventListener(ev,scheduleAutoSave);if(ev==="input")e.addEventListener("change",scheduleAutoSave)})}
+function saveConfig(){if(autoSaveBusy){autoSaveQueued=true;return}autoSaveBusy=true;fetch("/config",{method:"POST",body:body()}).then(r=>{if(!r.ok)throw new Error("config");return fetch("/save",{method:"POST"})}).then(r=>{if(!r.ok)throw new Error("save");showResult("已自动保存");pollStatus()}).catch(()=>showResult("自动保存失败")).finally(()=>{autoSaveBusy=false;if(autoSaveQueued){autoSaveQueued=false;scheduleAutoSave()}})}
 function rebootBoard(){setPolling(false);const p=document.getElementById("poll");if(p)p.checked=false;showResult("正在重启...");fetch("/reboot",{method:"POST"}).catch(()=>{})}
 function recQuery(){const ids=document.getElementById("recIds").value.trim();return ids?("?ids="+encodeURIComponent(ids)):""}
 function stopReason(v){return v===1?"满":(v===2?"超时":"手动/无")}
@@ -452,6 +425,6 @@ function setRecUi(j){const active=j&&j.active;document.getElementById("recState"
 function pollRec(){fetch("/rec_status").then(r=>r.json()).then(setRecUi).catch(()=>{})}
 function startRec(){fetch("/rec_start"+recQuery(),{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(!recTimer)recTimer=setInterval(pollRec,800)})}
 function stopRec(){fetch("/rec_stop",{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(recTimer){clearInterval(recTimer);recTimer=null}})}
-pollStatus();pollRec();
+bindAutoSave();pollStatus();pollRec();
 </script>
 </body></html>)HTML";
