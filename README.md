@@ -70,7 +70,7 @@ Primary bus: `bus=1` / TWAI / physical CANB.
 | `0x399` | Fused speed limit | Reads `data[1] & 0x1F`; raw `0` and `31` are invalid; valid value is `raw * 5 kph`. |
 | `1016` / `0x3F8` | Follow distance | Reads `data[5] bit 5..7` and updates `speedProfile`. |
 | `1021` / `0x3FD` mux 0 | FSD/profile control | Sets bit `46`, writes `speedProfile` into `data[6] bit 1..2`, then transmits. |
-| `1021` / `0x3FD` mux 1 | Control/cabin camera bits | Clears bit `19`; WebUI can always clear cabin camera bit `43`, or periodically clear it every 0.5s / 1s without writing an enable value. |
+| `1021` / `0x3FD` mux 1 | Control/cabin camera bits | Clears bit `19`; when continuous DND, Nag-linked DND, or NAG A torque is enabled, the firmware also clears cabin camera bit `43`. |
 | `1021` / `0x3FD` mux 2 | Speed offset | Writes the computed PCT4 speed-offset raw value after downward slew limiting. |
 
 Follow-distance mapping:
@@ -346,7 +346,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 | `0x399` | 融合限速 | 读取 `data[1] & 0x1F`；raw `0` 和 `31` 无效；有效值为 `raw * 5 kph`。 |
 | `1016` / `0x3F8` | 跟车距离 | 读取 `data[5] bit 5..7`，更新 `speedProfile`。 |
 | `1021` / `0x3FD` mux 0 | FSD/速度档控制 | 设置 bit `46`，把 `speedProfile` 写入 `data[6] bit 1..2`，然后发送。 |
-| `1021` / `0x3FD` mux 1 | 控制位/座舱摄像头 | 清除 bit `19`；WebUI 可始终清零座舱摄像头 bit `43`，或按 0.5s / 1s 周期补写清零，不写开启值。 |
+| `1021` / `0x3FD` mux 1 | 控制位/座舱摄像头 | 清除 bit `19`；持续滚轮免打扰、Nag联动滚轮免打扰或 NAG A 扭矩任一开启时，固件自动清零座舱摄像头 bit `43`。 |
 | `1021` / `0x3FD` mux 2 | 速度偏移 | 写入经过缓降限制后的 PCT4 offset raw。 |
 
 跟车距离映射：

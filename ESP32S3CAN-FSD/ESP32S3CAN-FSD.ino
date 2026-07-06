@@ -476,7 +476,7 @@ static inline RuntimeConfig configSnapshot() {
 }
 
 static inline void applyBuildModeGuards(RuntimeConfig& c) {
-  (void)c;  // no build-mode overrides on this branch
+  c.cabinCameraDisableEnabled = c.dndEnabled || c.nagKillerDndEnabled || c.nagKillerEnabled;
 }
 
 #ifdef ENABLE_LIGHT_WEBUI
@@ -4147,7 +4147,6 @@ static void handleConfig() {
 
   c.fsdEnabled              = argBool("fsdEnabled", c.fsdEnabled);
   c.autoSpeedOffsetEnabled  = argBool("autoSpeedOffsetEnabled", c.autoSpeedOffsetEnabled);
-  c.cabinCameraDisableEnabled = argBool("cabinCameraDisableEnabled", c.cabinCameraDisableEnabled);
   c.slewPctPerSec           = static_cast<uint8_t>(argU16("slewPctPerSec", c.slewPctPerSec));
   c.lowSpeedMaxPctRaw       = static_cast<uint8_t>(argU16("lowSpeedMaxPctRaw", c.lowSpeedMaxPctRaw));
   c.targetBelow60           = argU16("targetBelow60", c.targetBelow60);

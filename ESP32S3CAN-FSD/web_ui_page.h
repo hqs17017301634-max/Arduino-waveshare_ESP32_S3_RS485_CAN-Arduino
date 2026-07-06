@@ -87,8 +87,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="card">
 <h2>Nag-Killer 扭矩</h2>
 <label>Nag-Killer扭矩总开关<input type="checkbox" id="nagKillerEnabled"></label>
-<label>座舱摄像头始终关闭<input type="checkbox" id="cabinCameraDisableEnabled"></label>
-<p class="hint">座舱摄像头始终关闭走 bus=1/TWAI/物理CANB 的 0x3FD mux1 bit43；开启后每帧写 0。</p>
+<p class="hint">持续滚轮免打扰、Nag-Killer联动滚轮免打扰、NAG A 扭矩任一开启时，固件会自动在 bus=1/TWAI/物理CANB 的 0x3FD mux1 清座舱摄像头 bit43。</p>
 <h3>NAG A：HandsOn 1 范围 Nm</h3>
 <label>负向 Min<span class="signed"><b>-</b><input type="number" id="nagKillerAHo1NegMinNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
 <label>负向 Max<span class="signed"><b>-</b><input type="number" id="nagKillerAHo1NegMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
@@ -266,7 +265,7 @@ function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")re
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerAHo1NegMinNm","nagKillerAHo1NegMaxNm","nagKillerAHo1PosMinNm","nagKillerAHo1PosMaxNm","nagKillerAHo2NegMinNm","nagKillerAHo2NegMaxNm","nagKillerAHo2PosMinNm","nagKillerAHo2PosMaxNm","scrollGearInjectEnabled","can1ReceiveOnly"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerAHo1NegMinNm","nagKillerAHo1NegMaxNm","nagKillerAHo1PosMinNm","nagKillerAHo1PosMaxNm","nagKillerAHo2NegMinNm","nagKillerAHo2NegMaxNm","nagKillerAHo2PosMinNm","nagKillerAHo2PosMaxNm","scrollGearInjectEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
