@@ -98,7 +98,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <h3>MCP2515 / 物理 CANA</h3>
 <label>启用<input type="checkbox" id="canbEnabled"></label>
 <label>维修模式 0x339<input type="checkbox" id="canbServiceModeEnabled"></label>
-<label>硬件过滤模式<select id="canbFilterMode"><option value="0">抓包调试</option><option value="1">当前功能相关ID</option></select></label>
+<label>硬件过滤模式<select id="canbFilterMode"><option value="0">抓包调试</option><option value="1">当前功能相关ID</option><option value="3">仅PT NAG</option><option value="4">仅BODY基础</option></select></label>
 </div>
 
 <div class="card">
@@ -170,6 +170,8 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>MCP2515 TX调度 发出/丢弃/过期/失败/触顶</span><span><b id="canbTxSchedTx">-</b> / <b id="canbTxSchedDrop">-</b> / <b id="canbTxSchedExpired">-</b> / <b id="canbTxSchedFail">-</b> / <b id="canbTxSchedBudgetHit">-</b></span></div>
 <div class="kv"><span>MCP2515 last ID</span><span id="canbLastId">-</span></div>
 <div class="kv"><span>MCP2515 EFLG / RX overflow</span><span><b id="canbErrorFlags">-</b> / <b id="canbRxOverflowCount">-</b></span></div>
+<div class="kv"><span>MCP2515自恢复 次数/状态</span><span><b id="canbRecoveryCount">-</b> / <b id="canbRecoveryActive">-</b></span></div>
+<div class="kv"><span>MCP2515自恢复 原因/距今</span><span><b id="canbRecoveryReason">-</b> / <b id="canbRecoveryAgeMs">-</b></span></div>
 </div>
 
 <div class="card">
@@ -304,6 +306,8 @@ function cx100(v){return v<=-32000?"-":(v/100).toFixed(2)+" ℃"}
 function durMs(v){v=Number(v)||0;if(v<1000)return v+" ms";if(v<60000)return (v/1000).toFixed(1)+" 秒";return (v/60000).toFixed(1)+" 分钟"}
 function ageMs(v){v=Number(v)||0;return v===0?"刚刚":durMs(v)+"前"}
 function canBus(v){return v===1?"bus=1":(v===2?"bus=2":v)}
+function canbFilterName(v){return {0:"抓包调试",1:"当前功能相关ID",2:"当前功能相关ID",3:"仅PT NAG",4:"仅BODY基础"}[v]||v}
+function canbRecoveryReason(v){return ["无","RX overflow","严重EFLG持续","发送失败过快"][v]||v}
 function us(v){return (v>>>0)+" us"}
 function kb(v){return Math.round((v||0)/1024)+" KB"}
 function setDiagPage(on){const main=document.getElementById("mainPage"),diag=document.getElementById("diagPage");if(main)main.classList.toggle("hidden",on);if(diag)diag.classList.toggle("hidden",!on);if(on){const p=document.getElementById("poll");if(p&&!p.checked){p.checked=true;setPolling(true)}window.scrollTo(0,0)}}
@@ -315,6 +319,10 @@ if(["loopAvgUs","loopMaxUs","loopWaitAvgUs","loopPeriodMaxUs","webTaskMaxUs","ca
 if(["totalHeapBytes","freeHeapBytes","minFreeHeapBytes"].includes(k))return kb(v);
 if(["can1RxRate","can1TxRate","can1TxFailRate","canbRxRate","canbTxRate","canbTxFailRate"].includes(k))return v+"/s";
 if(k==="canbLastId"||k==="canbErrorFlags"||k==="nagKillerTargetId")return "0x"+(v>>>0).toString(16).toUpperCase();
+if(k==="canbHardwareFilterMode")return canbFilterName(v);
+if(k==="canbRecoveryActive")return yesNo(v);
+if(k==="canbRecoveryReason")return canbRecoveryReason(v);
+if(k==="canbRecoveryAgeMs")return ageMs(v);
 if(k==="offsetRaw")return (Number(v||0)/4).toFixed(1)+"%";
 if(k==="dasLcHandsOnReasonSeen")return yesNo(v);
 if(k==="dasLcHandsOnReasonDecode")return ["已解码 / Decoded","未收到0x5D9 / No 0x5D9","DLC不足 / Bad DLC","缺DBC bit定义 / Missing bit layout","值超范围 / Invalid value"][v]||v;
@@ -389,6 +397,8 @@ else if(val("can1TxMaxUs")>2000||val("can1TxSlowCount")>0)add(1,"bus=1 TX耗时�
 if(inc("canbRxOverflowCount")>0)add(2,"MCP2515 RX overflow刚增加");
 else if(val("canbRxOverflowCount")>0)add(1,"MCP2515 RX overflow历史非0");
 if(val("canbErrorFlags")!==0)add(1,"MCP2515 EFLG非0");
+if(inc("canbRecoveryCount")>0)add(1,"MCP2515刚执行自恢复");
+if(val("canbRecoveryActive"))add(1,"MCP2515正在自恢复");
 if(val("canbDrainMaxUs")>1500)add(2,"MCP2515 drain耗时超过1.5ms");
 else if(val("canbDrainMaxUs")>=900)add(1,"MCP2515 drain触及900us预算");
 if(val("canbDrainMaxFrames")>=24)add(1,"MCP2515单轮drain达到活动预算");
@@ -407,7 +417,14 @@ const reasonEl=document.getElementById("autoDiagReasons");
 const adviceEl=document.getElementById("autoDiagAdvice");
 if(levelEl){levelEl.textContent=levelText;levelEl.style.color=level===2?"#f66":(level===1?"#ffd479":"#9f9")}
 if(reasonEl)reasonEl.textContent=items.length?items.slice(0,5).map(x=>(x.sev===2?"严重：":"警告：")+x.msg).join("；"):"未发现CPU/内存/CAN负载异常";
-if(adviceEl)adviceEl.textContent=level===2?"优先关闭抓包调试或切到功能ID过滤，复测关键功能":(level===1?"观察是否持续；必要时关闭WebUI轮询或减少抓包":"保持当前设置");
+if(adviceEl){
+const adv=[];
+if(val("canbHardwareFilterMode")===0&&(val("canbRxOverflowCount")>0||val("canbDrainMaxUs")>=900))adv.push("MCP2515切到当前功能相关ID/仅PT NAG/仅BODY基础");
+if(val("canbErrorFlags")!==0||val("canbTxFailRate")>0)adv.push("检查CANB接线和终端电阻，固件会尝试软恢复");
+if(val("twaiRxMissed")>0||val("twaiRxOverrun")>0)adv.push("检查bus=1负载和过滤");
+if(level>=1&&adv.length===0)adv.push("观察是否持续；必要时关闭WebUI轮询或减少抓包");
+adviceEl.textContent=adv.length?adv.join("；"):"保持当前设置";
+}
 lastDiag=j;
 }
 function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&e.tagName!=="INPUT"&&e.tagName!=="SELECT")e.textContent=fmtStat(k,j[k])})}

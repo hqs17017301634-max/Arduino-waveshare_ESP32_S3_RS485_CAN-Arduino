@@ -134,6 +134,9 @@ constexpr uint32_t DIAG_TX_SLOW_US = 2000;
 
 constexpr uint8_t CANB_FILTER_ALL = 0;
 constexpr uint8_t CANB_FILTER_FEATURE = 1;
+constexpr uint8_t CANB_FILTER_LEGACY_MIN = 2;
+constexpr uint8_t CANB_FILTER_PT_NAG = 3;
+constexpr uint8_t CANB_FILTER_BODY = 4;
 constexpr uint8_t CANB_TX_SRC_OTHER = 0;
 constexpr uint8_t CANB_TX_SRC_NAG = 1;
 constexpr uint8_t CANB_TX_SRC_BATTERY = 2;
@@ -153,6 +156,13 @@ constexpr uint16_t CANB_TX_TTL_FAST_MS = 100;
 constexpr uint16_t CANB_TX_TTL_SCROLL_MS = 150;
 constexpr uint16_t CANB_TX_TTL_DEFAULT_MS = 300;
 constexpr uint16_t CANB_TX_TTL_PREHEAT_MS = 600;
+constexpr uint32_t CANB_RECOVERY_COOLDOWN_MS = 3000;
+constexpr uint8_t CANB_RECOVERY_EFLG_STREAK_LIMIT = 5;
+constexpr uint8_t CANB_RECOVERY_TX_FAIL_RATE_LIMIT = 3;
+constexpr uint8_t CANB_RECOVERY_REASON_NONE = 0;
+constexpr uint8_t CANB_RECOVERY_REASON_RX_OVERFLOW = 1;
+constexpr uint8_t CANB_RECOVERY_REASON_EFLG = 2;
+constexpr uint8_t CANB_RECOVERY_REASON_TX_FAIL = 3;
 constexpr uint8_t NAG_KILLER_MODE_A = 1;
 constexpr uint16_t NAG_KILLER_TORQUE_MAX_CX100 = 180; // 1.80 Nm
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_BASE = 2050;
@@ -193,7 +203,7 @@ struct RuntimeConfig {
 
   bool canbEnabled = true;
   bool canbServiceModeEnabled = false;
-  uint8_t canbFilterMode = CANB_FILTER_FEATURE; // 0=capture/debug all, 1=current feature IDs
+  uint8_t canbFilterMode = CANB_FILTER_FEATURE; // 0=all, 1=feature, 3=PT NAG, 4=BODY
   bool highBeamStrobeEnabled = false; // arms double-pull flash-to-pass trigger
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
@@ -218,7 +228,9 @@ static RuntimeConfig g_config;
 
 static uint8_t normalizeCanBFilterMode(uint8_t mode) {
   // Legacy saved value 2 used to mean "minimum"; map it to feature IDs.
-  return mode == CANB_FILTER_FEATURE || mode == 2 ? CANB_FILTER_FEATURE : CANB_FILTER_ALL;
+  if (mode == CANB_FILTER_FEATURE || mode == CANB_FILTER_LEGACY_MIN) return CANB_FILTER_FEATURE;
+  if (mode == CANB_FILTER_PT_NAG || mode == CANB_FILTER_BODY) return mode;
+  return CANB_FILTER_ALL;
 }
 
 static uint8_t normalizeNagKillerMode(uint8_t mode) {
@@ -270,6 +282,10 @@ struct RuntimeStatus {
   uint32_t canbLastId = 0;
   uint8_t canbErrorFlags = 0;
   uint32_t canbRxOverflowCount = 0;
+  uint32_t canbRecoveryCount = 0;
+  uint8_t canbRecoveryActive = 0;
+  uint8_t canbRecoveryReason = CANB_RECOVERY_REASON_NONE;
+  uint32_t canbRecoveryAgeMs = 0;
   uint32_t diagWindowMs = 0;
   uint32_t loopHz = 0;
   uint32_t loopAvgUs = 0;
@@ -1979,6 +1995,13 @@ static uint32_t canbTxCount = 0;
 static uint32_t canbTxFailCount = 0;
 static uint32_t canbLastId = 0;
 static uint32_t canbRxOverflowCount = 0;
+static volatile bool canbRecoveryInProgress = false;
+static volatile uint8_t canbRecoveryPendingReason = CANB_RECOVERY_REASON_NONE;
+static uint32_t canbRecoveryCount = 0;
+static uint32_t canbLastRecoveryMs = 0;
+static uint8_t canbEflgStreak = 0;
+static uint32_t canbTxFailWindowStartMs = 0;
+static uint8_t canbTxFailWindowCount = 0;
 
 struct CanBTxQueueItem {
   can_frame frame{};
@@ -2203,6 +2226,7 @@ constexpr uint32_t CANB_RX_DRAIN_TIME_US = 900;
 
 static void setupCanB();
 static bool applyCanBFilters(uint8_t mode);
+static bool canbSoftwareAcceptId(uint8_t mode, uint32_t canId);
 static bool canb_recv(can_frame& frame);
 static bool canb_send(const can_frame& frame, uint8_t source);
 static bool canbScheduleTx(const can_frame& frame, uint8_t source, uint8_t priority,
@@ -2211,6 +2235,7 @@ static void serviceCanBTxScheduler();
 static bool canbIntAsserted();
 static void drainCanBWithBudget(const RuntimeConfig& cfg);
 static void updateCanBErrorStatus();
+static void requestCanBRecovery(uint8_t reason);
 static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg);
 static void setCanBServiceMode(bool enabled);
 static void serviceCanBScheduledTx();
@@ -2272,6 +2297,44 @@ static void canBInitTask(void*) {
   vTaskDelete(nullptr);
 }
 
+static void canBRecoveryTask(void*) {
+  const uint8_t reason = canbRecoveryPendingReason;
+  Serial.printf("[CANB] recovery begin reason=%u\n", static_cast<unsigned>(reason));
+  g_status.canbRecoveryActive = 1;
+  g_status.canbRecoveryReason = reason;
+  canbReady = false;
+  setupCanB();
+  canbRecoveryCount++;
+  canbLastRecoveryMs = millis();
+  canbEflgStreak = 0;
+  canbTxFailWindowStartMs = 0;
+  canbTxFailWindowCount = 0;
+  g_status.canbRecoveryCount = canbRecoveryCount;
+  g_status.canbRecoveryActive = 0;
+  g_status.canbRecoveryReason = reason;
+  Serial.printf("[CANB] recovery done ready=%u count=%lu\n",
+                canbReady ? 1U : 0U,
+                static_cast<unsigned long>(canbRecoveryCount));
+  canbRecoveryInProgress = false;
+  vTaskDelete(nullptr);
+}
+
+static void requestCanBRecovery(uint8_t reason) {
+  if (reason == CANB_RECOVERY_REASON_NONE || !canbReady || canbRecoveryInProgress) return;
+  const uint32_t now = millis();
+  if (canbLastRecoveryMs != 0 && (now - canbLastRecoveryMs) < CANB_RECOVERY_COOLDOWN_MS) return;
+
+  canbRecoveryPendingReason = reason;
+  canbRecoveryInProgress = true;
+  g_status.canbRecoveryActive = 1;
+  g_status.canbRecoveryReason = reason;
+  BaseType_t ok = xTaskCreatePinnedToCore(canBRecoveryTask, "canbrecover", 4096, nullptr, 1, nullptr, 1);
+  if (ok != pdPASS) {
+    g_status.canbRecoveryActive = 0;
+    canbRecoveryInProgress = false;
+  }
+}
+
 static bool applyCanBFilters(uint8_t mode) {
   mode = normalizeCanBFilterMode(mode);
   if (mode == CANB_FILTER_FEATURE) {
@@ -2293,6 +2356,30 @@ static bool applyCanBFilters(uint8_t mode) {
     if (canb.setFilter(MCP2515::RXF4, false, 0x200) != MCP2515::ERROR_OK) return false;
     // Spare coarse slot kept for nearby feature expansion without changing masks.
     if (canb.setFilter(MCP2515::RXF5, false, 0x205) != MCP2515::ERROR_OK) return false;
+  } else if (mode == CANB_FILTER_PT_NAG) {
+    // PT CAN / Nag-Killer-only mode. Exact IDs keep MCP2515 RX pressure low
+    // when physical CANA is wired to X179 PIN 2/3 PT CAN.
+    if (canb.setFilterMask(MCP2515::MASK0, false, 0x7FF) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF0, false, CAN_ID_NAG_MODE_C_TARGET) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF1, false, CAN_ID_DAS_STATUS) != MCP2515::ERROR_OK) return false;
+
+    if (canb.setFilterMask(MCP2515::MASK1, false, 0x7FF) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF2, false, CAN_ID_NAG_STEERING_ANGLE) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF3, false, CAN_ID_EPAS_SYS_STATUS) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF4, false, CAN_ID_NAG_MODE_C_TARGET) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF5, false, CAN_ID_DAS_STATUS) != MCP2515::ERROR_OK) return false;
+  } else if (mode == CANB_FILTER_BODY) {
+    // BODY CAN basic mode for X179 PIN 9/10 body features. This mode is narrow
+    // by design; use FEATURE or ALL when battery/BMS diagnostics are needed.
+    if (canb.setFilterMask(MCP2515::MASK0, false, 0x7FF) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF0, false, CANB_ID_VCLEFT_SWITCH) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF1, false, CANB_ID_SCCM_RIGHT_STALK) != MCP2515::ERROR_OK) return false;
+
+    if (canb.setFilterMask(MCP2515::MASK1, false, 0x7FF) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF2, false, CANB_ID_STW_ACTN_RQ) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF3, false, CANB_ID_BODY_LIGHTING) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF4, false, CAN_ID_UI_TRIP_PLANNING) != MCP2515::ERROR_OK) return false;
+    if (canb.setFilter(MCP2515::RXF5, false, 0x339) != MCP2515::ERROR_OK) return false;
   } else {
     if (canb.setFilterMask(MCP2515::MASK0, false, 0x000) != MCP2515::ERROR_OK) return false;
     // All-pass mode is useful for capture and unknown-ID debugging.
@@ -2311,27 +2398,68 @@ static bool applyCanBFilters(uint8_t mode) {
   return true;
 }
 
+static bool canbSoftwareAcceptId(uint8_t mode, uint32_t canId) {
+  mode = normalizeCanBFilterMode(mode);
+  if (mode == CANB_FILTER_ALL) return true;
+  if (mode == CANB_FILTER_PT_NAG) {
+    return canId == CAN_ID_NAG_MODE_C_TARGET ||
+           canId == CAN_ID_DAS_STATUS ||
+           canId == CAN_ID_NAG_STEERING_ANGLE ||
+           canId == CAN_ID_EPAS_SYS_STATUS;
+  }
+  if (mode == CANB_FILTER_BODY) {
+    return canId == CANB_ID_VCLEFT_SWITCH ||
+           canId == CANB_ID_SCCM_RIGHT_STALK ||
+           canId == CANB_ID_STW_ACTN_RQ ||
+           canId == CANB_ID_BODY_LIGHTING ||
+           canId == CAN_ID_UI_TRIP_PLANNING ||
+           canId == 0x339;
+  }
+
+  return canId == CAN_ID_UI_TRIP_PLANNING ||
+         canId == CAN_ID_BMS_STATUS ||
+         canId == CAN_ID_BMS_SOC_STATUS ||
+         canId == CAN_ID_BMS_THERMAL_STATUS ||
+         canId == CAN_ID_VCFRONT_SENSORS ||
+         canId == CAN_ID_BMS_BMB_MIN_MAX ||
+         canId == CAN_ID_BMS_LOG1 ||
+         canId == CAN_ID_BMS_LOG2 ||
+         canId == CAN_ID_NAG_MODE_C_TARGET ||
+         canId == CAN_ID_DAS_STATUS ||
+         canId == CAN_ID_NAG_STEERING_ANGLE ||
+         canId == CAN_ID_EPAS_SYS_STATUS ||
+         canId == CANB_ID_VCLEFT_SWITCH ||
+         canId == CANB_ID_SCCM_RIGHT_STALK ||
+         canId == CANB_ID_STW_ACTN_RQ ||
+         canId == CANB_ID_BODY_LIGHTING ||
+         canId == 0x339;
+}
+
 static bool canb_recv(can_frame& frame) {
   if (!canbReady) return false;
-  if (canb.readMessage(&frame) != MCP2515::ERROR_OK) return false;
+  for (uint8_t scan = 0; scan < 4; ++scan) {
+    if (canb.readMessage(&frame) != MCP2515::ERROR_OK) return false;
 
-  // Stage 1: ignore extended and remote frames; clamp DLC defensively.
-  if (frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG)) return false;
-  frame.can_id &= CAN_SFF_MASK;
-  if (frame.can_dlc > 8) frame.can_dlc = 8;
+    // Stage 1: ignore extended and remote frames; clamp DLC defensively.
+    if (frame.can_id & (CAN_EFF_FLAG | CAN_RTR_FLAG)) continue;
+    frame.can_id &= CAN_SFF_MASK;
+    if (frame.can_dlc > 8) frame.can_dlc = 8;
+    if (!canbSoftwareAcceptId(canbHardwareFilterMode, frame.can_id)) continue;
 
-  const uint32_t rxUs = micros();
-  if (diagCanbLastRxUs != 0) {
-    const uint32_t gapUs = rxUs - diagCanbLastRxUs;
-    if (gapUs > diagCanbRxGapMaxUs) diagCanbRxGapMaxUs = gapUs;
+    const uint32_t rxUs = micros();
+    if (diagCanbLastRxUs != 0) {
+      const uint32_t gapUs = rxUs - diagCanbLastRxUs;
+      if (gapUs > diagCanbRxGapMaxUs) diagCanbRxGapMaxUs = gapUs;
+    }
+    diagCanbLastRxUs = rxUs;
+    canbRxCount++;
+    canbLastId = frame.can_id;
+    g_status.canbRx = canbRxCount;
+    g_status.canbLastId = canbLastId;
+    recordCanFrame(frame, 'R', 2);
+    return true;
   }
-  diagCanbLastRxUs = rxUs;
-  canbRxCount++;
-  canbLastId = frame.can_id;
-  g_status.canbRx = canbRxCount;
-  g_status.canbLastId = canbLastId;
-  recordCanFrame(frame, 'R', 2);
-  return true;
+  return false;
 }
 
 static bool canb_send(const can_frame& frame, uint8_t source) {
@@ -2359,6 +2487,15 @@ static bool canb_send(const can_frame& frame, uint8_t source) {
   }
   canbTxFailCount++;
   g_status.canbTxFail = canbTxFailCount;
+  const uint32_t now = millis();
+  if (canbTxFailWindowStartMs == 0 || (now - canbTxFailWindowStartMs) > 1000UL) {
+    canbTxFailWindowStartMs = now;
+    canbTxFailWindowCount = 0;
+  }
+  if (canbTxFailWindowCount < UINT8_MAX) canbTxFailWindowCount++;
+  if (canbTxFailWindowCount >= CANB_RECOVERY_TX_FAIL_RATE_LIMIT) {
+    requestCanBRecovery(CANB_RECOVERY_REASON_TX_FAIL);
+  }
   return false;
 }
 
@@ -2475,10 +2612,23 @@ static void updateCanBErrorStatus() {
   if (!canbReady) return;
   const uint8_t flags = canb.getErrorFlags();
   g_status.canbErrorFlags = flags;
-  if (flags & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR)) {
+  const uint8_t overflowFlags = MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR;
+  if (flags & overflowFlags) {
     canbRxOverflowCount++;
     g_status.canbRxOverflowCount = canbRxOverflowCount;
     canb.clearRXnOVRFlags();
+    requestCanBRecovery(CANB_RECOVERY_REASON_RX_OVERFLOW);
+  }
+
+  const uint8_t severeFlags =
+      MCP2515::EFLG_TXBO | MCP2515::EFLG_TXEP | MCP2515::EFLG_RXEP;
+  if (flags & severeFlags) {
+    if (canbEflgStreak < UINT8_MAX) canbEflgStreak++;
+    if (canbEflgStreak >= CANB_RECOVERY_EFLG_STREAK_LIMIT) {
+      requestCanBRecovery(CANB_RECOVERY_REASON_EFLG);
+    }
+  } else {
+    canbEflgStreak = 0;
   }
 }
 
@@ -3786,6 +3936,10 @@ static void handleStatus() {
   s.bmsTempDecodedAgeMs =
       bmsTempDecodedLastRxMs == 0 ? 0 : (now - bmsTempDecodedLastRxMs);
 #ifdef ENABLE_CANB_MCP2515
+  s.canbRecoveryCount = canbRecoveryCount;
+  s.canbRecoveryActive = canbRecoveryInProgress ? 1 : 0;
+  s.canbRecoveryReason = canbRecoveryPendingReason;
+  s.canbRecoveryAgeMs = canbLastRecoveryMs == 0 ? 0 : (now - canbLastRecoveryMs);
   s.dndLastTriggerAgeMs = dndLastTriggerMs == 0 ? 0 : (now - dndLastTriggerMs);
   s.dndScrollCacheAgeMs = canbLastVcleftMux1Ms == 0 ? 0 : (now - canbLastVcleftMux1Ms);
 #endif
@@ -3882,6 +4036,10 @@ static void handleStatus() {
   j += ",\"canbLastId\":";           j += s.canbLastId;
   j += ",\"canbErrorFlags\":";       j += s.canbErrorFlags;
   j += ",\"canbRxOverflowCount\":";  j += s.canbRxOverflowCount;
+  j += ",\"canbRecoveryCount\":";    j += s.canbRecoveryCount;
+  j += ",\"canbRecoveryActive\":";   j += s.canbRecoveryActive;
+  j += ",\"canbRecoveryReason\":";   j += s.canbRecoveryReason;
+  j += ",\"canbRecoveryAgeMs\":";    j += s.canbRecoveryAgeMs;
   j += ",\"diagWindowMs\":";         j += s.diagWindowMs;
   j += ",\"loopHz\":";               j += s.loopHz;
   j += ",\"loopAvgUs\":";            j += s.loopAvgUs;
