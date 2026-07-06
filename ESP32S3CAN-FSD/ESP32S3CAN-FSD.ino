@@ -153,10 +153,8 @@ constexpr uint16_t CANB_TX_TTL_FAST_MS = 100;
 constexpr uint16_t CANB_TX_TTL_SCROLL_MS = 150;
 constexpr uint16_t CANB_TX_TTL_DEFAULT_MS = 300;
 constexpr uint16_t CANB_TX_TTL_PREHEAT_MS = 600;
-constexpr uint8_t NAG_KILLER_MODE_B = 1;
-constexpr uint8_t NAG_KILLER_MODE_C = 2;
-constexpr uint8_t NAG_KILLER_MODE_DOC = 3;
-constexpr uint16_t NAG_KILLER_TORQUE_MAX_CX100 = 280; // 2.80 Nm
+constexpr uint8_t NAG_KILLER_MODE_A = 1;
+constexpr uint16_t NAG_KILLER_TORQUE_MAX_CX100 = 180; // 1.80 Nm
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_BASE = 2050;
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_MIN =
     NAG_KILLER_TORQUE_RAW_BASE - NAG_KILLER_TORQUE_MAX_CX100;
@@ -202,19 +200,17 @@ struct RuntimeConfig {
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
   bool dndEnabled = false;             // continuous left scroll up/down on 0x3C2
-  bool nagKillerEnabled = false;       // experimental steering torque echo
+  bool nagKillerEnabled = false;       // NAG A: 0x370 torque echo on PT CAN
   bool nagKillerDndEnabled = false;    // 0x399 hands-on 2..6/9..10 triggers scroll DND actions
-  bool nagKillerTest052Enabled = false; // force-send configured 0x052 torque on live target frames
-  bool nagKillerTest370Enabled = false; // force-send configured 0x370 torque on live target frames
-  uint8_t nagKillerMode = NAG_KILLER_MODE_B; // 1=Mode B, 2=Mode C, 3=doc state machine
-  uint16_t nagKillerBurstMs = 1000;    // Mode B injection window
-  uint16_t nagKillerPauseMs = 1500;    // Mode B rest window
-  uint16_t nagKillerBPos1Cx100 = 180;  // Mode B + torque #1, centi-Nm
-  uint16_t nagKillerBPos2Cx100 = 150;  // Mode B + torque #2, centi-Nm
-  uint16_t nagKillerBNeg1Cx100 = 150;  // Mode B - torque #1, centi-Nm
-  uint16_t nagKillerBNeg2Cx100 = 180;  // Mode B - torque #2, centi-Nm
-  uint16_t nagKillerCNegCx100 = 180;   // Mode C negative endpoint, centi-Nm
-  uint16_t nagKillerCPosCx100 = 180;   // Mode C positive endpoint, centi-Nm
+  uint8_t nagKillerMode = NAG_KILLER_MODE_A; // fixed A mode, 0x370 only
+  uint16_t nagKillerAHo1NegMinCx100 = 150;
+  uint16_t nagKillerAHo1NegMaxCx100 = 180;
+  uint16_t nagKillerAHo1PosMinCx100 = 150;
+  uint16_t nagKillerAHo1PosMaxCx100 = 180;
+  uint16_t nagKillerAHo2NegMinCx100 = 150;
+  uint16_t nagKillerAHo2NegMaxCx100 = 180;
+  uint16_t nagKillerAHo2PosMinCx100 = 150;
+  uint16_t nagKillerAHo2PosMaxCx100 = 180;
   bool scrollGearInjectEnabled = false; // experimental: inject 0x229 right-stalk D/R request
   bool can1ReceiveOnly = false;        // bus=1/TWAI/physical CANB RX-only: gate TWAI TX
 };
@@ -227,8 +223,8 @@ static uint8_t normalizeCanBFilterMode(uint8_t mode) {
 }
 
 static uint8_t normalizeNagKillerMode(uint8_t mode) {
-  if (mode == NAG_KILLER_MODE_DOC) return NAG_KILLER_MODE_DOC;
-  return mode == NAG_KILLER_MODE_C ? NAG_KILLER_MODE_C : NAG_KILLER_MODE_B;
+  (void)mode;
+  return NAG_KILLER_MODE_A;
 }
 
 static uint16_t clampNagKillerBurstMs(uint16_t value) {
@@ -816,7 +812,6 @@ constexpr uint32_t CAN_ID_FOLLOW_DISTANCE = 1016; // 0x3F8 UI_driverAssistContro
 constexpr uint32_t CAN_ID_UI_DRIVER_ASSIST_CONTROL = CAN_ID_FOLLOW_DISTANCE;
 constexpr uint32_t CAN_ID_AP_CONTROL = 1021;
 constexpr uint32_t CAN_ID_UI_TRIP_PLANNING = 0x082;
-constexpr uint32_t CAN_ID_NAG_MODE_B_TARGET = 0x052;
 constexpr uint32_t CAN_ID_NAG_MODE_C_TARGET = 0x370;
 constexpr uint32_t CAN_ID_NAG_STEERING_ANGLE = 0x129;
 constexpr uint32_t CAN_ID_EPAS_SYS_STATUS = 0x313;
@@ -841,7 +836,6 @@ constexpr uint32_t CAN_ID_VEHICLE_SPEED = 0x257;
 
 static inline bool isRelevantCanId(uint32_t canId) {
   return canId == CAN_ID_UI_TRIP_PLANNING ||
-         canId == CAN_ID_NAG_MODE_B_TARGET ||
          canId == CAN_ID_NAG_MODE_C_TARGET ||
          canId == CAN_ID_NAG_STEERING_ANGLE ||
          canId == CAN_ID_EPAS_SYS_STATUS ||
@@ -1233,14 +1227,11 @@ constexpr uint8_t NAG_BLOCK_STEER_ANGLE = 8;
 constexpr uint8_t NAG_BLOCK_HANDS_STATE = 9;
 constexpr uint8_t NAG_BLOCK_TX = 10;
 constexpr uint8_t NAG_BLOCK_DLC = 11;
-constexpr uint32_t NAG_KILLER_MODE_C_STARTUP_A_MS = 5000UL;
-constexpr float NAG_KILLER_MODE_A_TORQUE_NM = 1.80f;
+constexpr uint32_t NAG_KILLER_MODE_A_STARTUP_MS = 8000UL;
 
 static uint32_t nagKillerTargetIdForMode(uint8_t mode) {
-  const uint8_t normalized = normalizeNagKillerMode(mode);
-  return normalized == NAG_KILLER_MODE_C || normalized == NAG_KILLER_MODE_DOC
-    ? CAN_ID_NAG_MODE_C_TARGET
-    : CAN_ID_NAG_MODE_B_TARGET;
+  (void)mode;
+  return CAN_ID_NAG_MODE_C_TARGET;
 }
 
 static bool nagKillerDocStrongHandsState(uint8_t state) {
@@ -1265,8 +1256,8 @@ static int nagKillerTorqueCx100(uint8_t b2, uint8_t b3) {
 }
 
 static void nagKillerNmToBytes(float nm, uint8_t& b2, uint8_t& b3) {
-  if (nm > 2.8f) nm = 2.8f;
-  if (nm < -2.8f) nm = -2.8f;
+  if (nm > 1.8f) nm = 1.8f;
+  if (nm < -1.8f) nm = -1.8f;
   uint16_t raw = static_cast<uint16_t>((nm + 20.5f) * 100.0f + 0.5f);
   if (raw > NAG_KILLER_TORQUE_RAW_MAX) raw = NAG_KILLER_TORQUE_RAW_MAX;
   if (raw < NAG_KILLER_TORQUE_RAW_MIN) raw = NAG_KILLER_TORQUE_RAW_MIN;
@@ -1274,24 +1265,37 @@ static void nagKillerNmToBytes(float nm, uint8_t& b2, uint8_t& b3) {
   b3 = static_cast<uint8_t>(raw & 0xFF);
 }
 
-static float nagKillerModeBTorqueNm(const RuntimeConfig& cfg, uint8_t index) {
-  switch (index & 0x03) {
-    case 0: return nagKillerTorqueCx100ToNm(cfg.nagKillerBPos1Cx100);
-    case 1: return nagKillerTorqueCx100ToNm(cfg.nagKillerBPos2Cx100);
-    case 2: return -nagKillerTorqueCx100ToNm(cfg.nagKillerBNeg1Cx100);
-    default: return -nagKillerTorqueCx100ToNm(cfg.nagKillerBNeg2Cx100);
+static void nagKillerNormalizeRange(uint16_t& minCx100, uint16_t& maxCx100) {
+  minCx100 = clampNagKillerTorqueCx100(minCx100);
+  maxCx100 = clampNagKillerTorqueCx100(maxCx100);
+  if (maxCx100 < minCx100) {
+    const uint16_t tmp = minCx100;
+    minCx100 = maxCx100;
+    maxCx100 = tmp;
   }
 }
 
-static float nagKillerModeCSweepTorqueNm(const RuntimeConfig& cfg, uint32_t now) {
-  const float negNm = -nagKillerTorqueCx100ToNm(cfg.nagKillerCNegCx100);
-  const float posNm = nagKillerTorqueCx100ToNm(cfg.nagKillerCPosCx100);
-  const float spanNm = posNm - negNm;
-  const uint32_t phase = now % 1000UL;
-  if (phase < 500UL) {
-    return negNm + (static_cast<float>(phase) / 500.0f) * spanNm;
+static uint16_t nagKillerRandomMagnitudeCx100(uint16_t minCx100, uint16_t maxCx100) {
+  nagKillerNormalizeRange(minCx100, maxCx100);
+  nagKillerWalkSeed = static_cast<uint16_t>(nagKillerWalkSeed * 1103U + 12345U);
+  const uint16_t span = static_cast<uint16_t>(maxCx100 - minCx100);
+  if (span == 0) return minCx100;
+  return static_cast<uint16_t>(minCx100 + (nagKillerWalkSeed % (span + 1U)));
+}
+
+static void nagKillerRangeForState(const RuntimeConfig& cfg,
+                                   bool useHandsOn2,
+                                   bool useNegative,
+                                   uint16_t& minCx100,
+                                   uint16_t& maxCx100) {
+  if (useHandsOn2) {
+    minCx100 = useNegative ? cfg.nagKillerAHo2NegMinCx100 : cfg.nagKillerAHo2PosMinCx100;
+    maxCx100 = useNegative ? cfg.nagKillerAHo2NegMaxCx100 : cfg.nagKillerAHo2PosMaxCx100;
+  } else {
+    minCx100 = useNegative ? cfg.nagKillerAHo1NegMinCx100 : cfg.nagKillerAHo1PosMinCx100;
+    maxCx100 = useNegative ? cfg.nagKillerAHo1NegMaxCx100 : cfg.nagKillerAHo1PosMaxCx100;
   }
-  return posNm - (static_cast<float>(phase - 500UL) / 500.0f) * spanNm;
+  nagKillerNormalizeRange(minCx100, maxCx100);
 }
 
 static bool nagKillerApStateActive(uint8_t state) {
@@ -1476,6 +1480,7 @@ static void handleDasCarLogFrame(const can_frame& frame) {
   dasLcHandsOnReasonLatestMs = now;
 }
 
+#if 0
 static bool decideNagKillerDocTorque(uint32_t now, float& torqueNm, uint8_t& handsLevel) {
   if (!nagKillerSteeringContextFresh(now)) {
     g_status.nagKillerBlocked = NAG_BLOCK_STALE_STEER;
@@ -1704,15 +1709,54 @@ static bool decideNagKillerTorque(const RuntimeConfig& cfg,
   g_status.nagKillerBlocked = NAG_BLOCK_MODE;
   return false;
 }
+#endif
+
+static bool decideNagKillerTorque(const RuntimeConfig& cfg, uint8_t& outB2, uint8_t& outB3) {
+  const uint32_t now = millis();
+  g_status.nagKillerMode = NAG_KILLER_MODE_A;
+  g_status.nagKillerBurstActive = 0;
+
+  if (!cfg.nagKillerEnabled) {
+    g_status.nagKillerBlocked = NAG_BLOCK_DISABLED;
+    return false;
+  }
+  if (!nagKillerApContextFresh(now)) {
+    g_status.nagKillerBlocked = NAG_BLOCK_STALE_AP;
+    return false;
+  }
+  if (!nagKillerApStateActive(nagKillerApState)) {
+    g_status.nagKillerBlocked = NAG_BLOCK_AP_STATE;
+    return false;
+  }
+
+  uint16_t minCx100 = 0;
+  uint16_t maxCx100 = 0;
+  bool useNegative = false;
+  if (nagKillerApActiveEnterMs != 0 &&
+      (now - nagKillerApActiveEnterMs) < NAG_KILLER_MODE_A_STARTUP_MS) {
+    nagKillerRangeForState(cfg, false, false, minCx100, maxCx100);
+  } else {
+    if (!nagKillerSteeringContextFresh(now)) {
+      g_status.nagKillerBlocked = NAG_BLOCK_STALE_STEER;
+      return false;
+    }
+    useNegative = nagKillerSteeringAngleDeg > 0.0f;
+    nagKillerRangeForState(cfg, nagKillerHandsOnState == 2, useNegative, minCx100, maxCx100);
+  }
+
+  const uint16_t magCx100 = nagKillerRandomMagnitudeCx100(minCx100, maxCx100);
+  const float torqueNm = (useNegative ? -static_cast<float>(magCx100)
+                                      : static_cast<float>(magCx100)) / 100.0f;
+  nagKillerNmToBytes(torqueNm, outB2, outB3);
+  nagKillerLastModeCTorqueNm = torqueNm;
+  g_status.nagKillerBurstActive = 1;
+  g_status.nagKillerBlocked = NAG_BLOCK_NONE;
+  return true;
+}
 
 static void handleNagKillerTargetFrame(const can_frame& frame, const RuntimeConfig& cfg) {
-  const uint8_t mode = normalizeNagKillerMode(cfg.nagKillerMode);
-  const uint32_t targetId = nagKillerTargetIdForMode(mode);
-  const bool test052 = cfg.nagKillerTest052Enabled && frame.can_id == CAN_ID_NAG_MODE_B_TARGET;
-  const bool test370 = cfg.nagKillerTest370Enabled && frame.can_id == CAN_ID_NAG_MODE_C_TARGET;
-  const bool testOverride = test052 || test370;
-  const uint32_t activeTargetId = testOverride ? frame.can_id : targetId;
-  g_status.nagKillerMode = mode;
+  constexpr uint32_t activeTargetId = CAN_ID_NAG_MODE_C_TARGET;
+  g_status.nagKillerMode = NAG_KILLER_MODE_A;
   g_status.nagKillerTargetId = activeTargetId;
   g_status.nagKillerActive = 0;
 
@@ -1729,27 +1773,16 @@ static void handleNagKillerTargetFrame(const can_frame& frame, const RuntimeConf
   const int realTorque = nagKillerTorqueCx100(frame.data[2], frame.data[3]);
   g_status.nagKillerTargetHandsOn = targetHandsOn;
   g_status.nagKillerRealTorqueCx100 = realTorque;
-  if (!testOverride &&
-      ((mode == NAG_KILLER_MODE_DOC && targetHandsOn != 0) ||
-       (mode != NAG_KILLER_MODE_DOC && targetHandsOn > 1))) {
-    g_status.nagKillerBlocked = NAG_BLOCK_TARGET_HO;
-    return;
-  }
 
   uint8_t b2 = 0;
   uint8_t b3 = 0;
-  uint8_t handsOnLevel = 0;
-  bool forceHandsOnLevel = false;
-  if (!decideNagKillerTorque(cfg, activeTargetId, testOverride, b2, b3, handsOnLevel, forceHandsOnLevel)) return;
+  if (!decideNagKillerTorque(cfg, b2, b3)) return;
 
   can_frame echo = frame;
   echo.can_id = activeTargetId;
   echo.can_dlc = 8;
   echo.data[2] = static_cast<uint8_t>((echo.data[2] & 0xF0) | (b2 & 0x0F));
   echo.data[3] = b3;
-  if (forceHandsOnLevel) {
-    echo.data[4] = static_cast<uint8_t>((echo.data[4] & ~0xC0) | ((handsOnLevel & 0x03) << 6));
-  }
   echo.data[6] = static_cast<uint8_t>((echo.data[6] & 0xF0) |
                                       (((echo.data[6] & 0x0F) + 1) & 0x0F));
   echo.data[7] = nagKillerChecksum(echo);
@@ -1758,7 +1791,7 @@ static void handleNagKillerTargetFrame(const can_frame& frame, const RuntimeConf
     nagKillerLastTxMs = millis();
     g_status.nagKillerTxCount++;
     g_status.nagKillerLastTorqueCx100 = nagKillerTorqueCx100(b2, b3);
-    g_status.nagKillerSetHandsOn = forceHandsOnLevel ? handsOnLevel : 0;
+    g_status.nagKillerSetHandsOn = 0;
     g_status.nagKillerActive = 1;
     g_status.nagKillerBlocked = NAG_BLOCK_NONE;
   } else {
@@ -2240,7 +2273,7 @@ static bool applyCanBFilters(uint8_t mode) {
     // six filters, so the masks group nearby IDs while still excluding most
     // unrelated 11-bit traffic.
     if (canb.setFilterMask(MCP2515::MASK0, false, 0x42F) != MCP2515::ERROR_OK) return false;
-    // Covers: 0x052, 0x082, 0x212, 0x292, 0x3C2.
+    // Covers: 0x082, 0x212, 0x292, 0x3C2.
     if (canb.setFilter(MCP2515::RXF0, false, 0x002) != MCP2515::ERROR_OK) return false;
     // Covers: 0x129, 0x229, 0x339.
     if (canb.setFilter(MCP2515::RXF1, false, 0x029) != MCP2515::ERROR_OK) return false;
@@ -3427,7 +3460,7 @@ static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg) {
   canbLastId = frame.can_id;
 
   handleNagKillerContextFrame(frame, cfg);
-  if (frame.can_id == CAN_ID_NAG_MODE_B_TARGET || frame.can_id == CAN_ID_NAG_MODE_C_TARGET) {
+  if (frame.can_id == CAN_ID_NAG_MODE_C_TARGET) {
     handleNagKillerTargetFrame(frame, cfg);
   }
 
@@ -3828,13 +3861,8 @@ static void handleStatus() {
   s.dndLastTriggerAgeMs = dndLastTriggerMs == 0 ? 0 : (now - dndLastTriggerMs);
   s.dndScrollCacheAgeMs = canbLastVcleftMux1Ms == 0 ? 0 : (now - canbLastVcleftMux1Ms);
 #endif
-  s.nagKillerMode = normalizeNagKillerMode(c.nagKillerMode);
-  s.nagKillerTargetId = nagKillerTargetIdForMode(s.nagKillerMode);
-  if (c.nagKillerTest052Enabled && !c.nagKillerTest370Enabled) {
-    s.nagKillerTargetId = CAN_ID_NAG_MODE_B_TARGET;
-  } else if (c.nagKillerTest370Enabled && !c.nagKillerTest052Enabled) {
-    s.nagKillerTargetId = CAN_ID_NAG_MODE_C_TARGET;
-  }
+  s.nagKillerMode = NAG_KILLER_MODE_A;
+  s.nagKillerTargetId = CAN_ID_NAG_MODE_C_TARGET;
   s.nagKillerLastRxAgeMs = nagKillerLastRxMs == 0 ? 0 : (now - nagKillerLastRxMs);
   s.nagKillerLastTxAgeMs = nagKillerLastTxMs == 0 ? 0 : (now - nagKillerLastTxMs);
   s.nagKillerApAgeMs = nagKillerLastApMs == 0 ? 0 : (now - nagKillerLastApMs);
@@ -3895,17 +3923,15 @@ static void handleStatus() {
   j += ",\"dndEnabled\":"; j += c.dndEnabled ? 1 : 0;
   j += ",\"nagKillerEnabled\":"; j += c.nagKillerEnabled ? 1 : 0;
   j += ",\"nagKillerDndEnabled\":"; j += c.nagKillerDndEnabled ? 1 : 0;
-  j += ",\"nagKillerTest052Enabled\":"; j += c.nagKillerTest052Enabled ? 1 : 0;
-  j += ",\"nagKillerTest370Enabled\":"; j += c.nagKillerTest370Enabled ? 1 : 0;
-  j += ",\"nagKillerMode\":"; j += normalizeNagKillerMode(c.nagKillerMode);
-  j += ",\"nagKillerBurstMs\":"; j += c.nagKillerBurstMs;
-  j += ",\"nagKillerPauseMs\":"; j += c.nagKillerPauseMs;
-  j += ",\"nagKillerBPos1Nm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerBPos1Cx100), 2);
-  j += ",\"nagKillerBPos2Nm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerBPos2Cx100), 2);
-  j += ",\"nagKillerBNeg1Nm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerBNeg1Cx100), 2);
-  j += ",\"nagKillerBNeg2Nm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerBNeg2Cx100), 2);
-  j += ",\"nagKillerCNegNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerCNegCx100), 2);
-  j += ",\"nagKillerCPosNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerCPosCx100), 2);
+  j += ",\"nagKillerMode\":"; j += NAG_KILLER_MODE_A;
+  j += ",\"nagKillerAHo1NegMinNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo1NegMinCx100), 2);
+  j += ",\"nagKillerAHo1NegMaxNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo1NegMaxCx100), 2);
+  j += ",\"nagKillerAHo1PosMinNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo1PosMinCx100), 2);
+  j += ",\"nagKillerAHo1PosMaxNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo1PosMaxCx100), 2);
+  j += ",\"nagKillerAHo2NegMinNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo2NegMinCx100), 2);
+  j += ",\"nagKillerAHo2NegMaxNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo2NegMaxCx100), 2);
+  j += ",\"nagKillerAHo2PosMinNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo2PosMinCx100), 2);
+  j += ",\"nagKillerAHo2PosMaxNm\":"; j += String(nagKillerTorqueCx100ToNm(c.nagKillerAHo2PosMaxCx100), 2);
   j += ",\"scrollGearInjectEnabled\":"; j += c.scrollGearInjectEnabled ? 1 : 0;
   j += ",\"can1ReceiveOnly\":"; j += c.can1ReceiveOnly ? 1 : 0;
   j += ",\"can1Rx\":";               j += s.can1Rx;
@@ -4146,17 +4172,15 @@ static void handleConfig() {
   c.dndEnabled              = argBool("dndEnabled", c.dndEnabled);
   c.nagKillerEnabled        = argBool("nagKillerEnabled", c.nagKillerEnabled);
   c.nagKillerDndEnabled     = argBool("nagKillerDndEnabled", c.nagKillerDndEnabled);
-  c.nagKillerTest052Enabled = argBool("nagKillerTest052Enabled", c.nagKillerTest052Enabled);
-  c.nagKillerTest370Enabled = argBool("nagKillerTest370Enabled", c.nagKillerTest370Enabled);
-  c.nagKillerMode           = normalizeNagKillerMode(static_cast<uint8_t>(argU16("nagKillerMode", c.nagKillerMode)));
-  c.nagKillerBurstMs        = clampNagKillerBurstMs(argU16("nagKillerBurstMs", c.nagKillerBurstMs));
-  c.nagKillerPauseMs        = clampNagKillerPauseMs(argU16("nagKillerPauseMs", c.nagKillerPauseMs));
-  c.nagKillerBPos1Cx100     = argPositiveNmCx100("nagKillerBPos1Nm", c.nagKillerBPos1Cx100);
-  c.nagKillerBPos2Cx100     = argPositiveNmCx100("nagKillerBPos2Nm", c.nagKillerBPos2Cx100);
-  c.nagKillerBNeg1Cx100     = argNegativeNmAbsCx100("nagKillerBNeg1Nm", c.nagKillerBNeg1Cx100);
-  c.nagKillerBNeg2Cx100     = argNegativeNmAbsCx100("nagKillerBNeg2Nm", c.nagKillerBNeg2Cx100);
-  c.nagKillerCNegCx100      = argNegativeNmAbsCx100("nagKillerCNegNm", c.nagKillerCNegCx100);
-  c.nagKillerCPosCx100      = argPositiveNmCx100("nagKillerCPosNm", c.nagKillerCPosCx100);
+  c.nagKillerMode           = NAG_KILLER_MODE_A;
+  c.nagKillerAHo1NegMinCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo1NegMinNm", c.nagKillerAHo1NegMinCx100));
+  c.nagKillerAHo1NegMaxCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo1NegMaxNm", c.nagKillerAHo1NegMaxCx100));
+  c.nagKillerAHo1PosMinCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo1PosMinNm", c.nagKillerAHo1PosMinCx100));
+  c.nagKillerAHo1PosMaxCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo1PosMaxNm", c.nagKillerAHo1PosMaxCx100));
+  c.nagKillerAHo2NegMinCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo2NegMinNm", c.nagKillerAHo2NegMinCx100));
+  c.nagKillerAHo2NegMaxCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo2NegMaxNm", c.nagKillerAHo2NegMaxCx100));
+  c.nagKillerAHo2PosMinCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo2PosMinNm", c.nagKillerAHo2PosMinCx100));
+  c.nagKillerAHo2PosMaxCx100 = clampNagKillerTorqueCx100(argPositiveNmCx100("nagKillerAHo2PosMaxNm", c.nagKillerAHo2PosMaxCx100));
   c.scrollGearInjectEnabled = argBool("scrollGearInjectEnabled", c.scrollGearInjectEnabled);
   c.can1ReceiveOnly        = argBool("can1ReceiveOnly", c.can1ReceiveOnly);
 
@@ -4391,17 +4415,15 @@ static void loadConfigFromPrefs() {
   c.dndEnabled             = prefs.getBool("dndCont", c.dndEnabled);
   c.nagKillerEnabled       = prefs.getBool("nagEn", c.nagKillerEnabled);
   c.nagKillerDndEnabled    = prefs.getBool("nagDnd", c.nagKillerDndEnabled);
-  c.nagKillerTest052Enabled = prefs.getBool("nagT052", c.nagKillerTest052Enabled);
-  c.nagKillerTest370Enabled = prefs.getBool("nagT370", c.nagKillerTest370Enabled);
-  c.nagKillerMode          = normalizeNagKillerMode(prefs.getUChar("nagMode", c.nagKillerMode));
-  c.nagKillerBurstMs       = clampNagKillerBurstMs(prefs.getUShort("nagBurst", c.nagKillerBurstMs));
-  c.nagKillerPauseMs       = clampNagKillerPauseMs(prefs.getUShort("nagPause", c.nagKillerPauseMs));
-  c.nagKillerBPos1Cx100    = clampNagKillerTorqueCx100(prefs.getUShort("nagBPos1", c.nagKillerBPos1Cx100));
-  c.nagKillerBPos2Cx100    = clampNagKillerTorqueCx100(prefs.getUShort("nagBPos2", c.nagKillerBPos2Cx100));
-  c.nagKillerBNeg1Cx100    = clampNagKillerTorqueCx100(prefs.getUShort("nagBNeg1", c.nagKillerBNeg1Cx100));
-  c.nagKillerBNeg2Cx100    = clampNagKillerTorqueCx100(prefs.getUShort("nagBNeg2", c.nagKillerBNeg2Cx100));
-  c.nagKillerCNegCx100     = clampNagKillerTorqueCx100(prefs.getUShort("nagCNeg", c.nagKillerCNegCx100));
-  c.nagKillerCPosCx100     = clampNagKillerTorqueCx100(prefs.getUShort("nagCPos", c.nagKillerCPosCx100));
+  c.nagKillerMode          = NAG_KILLER_MODE_A;
+  c.nagKillerAHo1NegMinCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA1NMin", c.nagKillerAHo1NegMinCx100));
+  c.nagKillerAHo1NegMaxCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA1NMax", c.nagKillerAHo1NegMaxCx100));
+  c.nagKillerAHo1PosMinCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA1PMin", c.nagKillerAHo1PosMinCx100));
+  c.nagKillerAHo1PosMaxCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA1PMax", c.nagKillerAHo1PosMaxCx100));
+  c.nagKillerAHo2NegMinCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA2NMin", c.nagKillerAHo2NegMinCx100));
+  c.nagKillerAHo2NegMaxCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA2NMax", c.nagKillerAHo2NegMaxCx100));
+  c.nagKillerAHo2PosMinCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA2PMin", c.nagKillerAHo2PosMinCx100));
+  c.nagKillerAHo2PosMaxCx100 = clampNagKillerTorqueCx100(prefs.getUShort("nagA2PMax", c.nagKillerAHo2PosMaxCx100));
   c.scrollGearInjectEnabled = prefs.getBool("gearInject", c.scrollGearInjectEnabled);
   c.can1ReceiveOnly        = prefs.getBool("can1RxOnly", c.can1ReceiveOnly);
   prefs.end();
@@ -4439,17 +4461,15 @@ static void saveConfigToPrefs() {
   prefs.putBool("dndCont", c.dndEnabled);
   prefs.putBool("nagEn", c.nagKillerEnabled);
   prefs.putBool("nagDnd", c.nagKillerDndEnabled);
-  prefs.putBool("nagT052", c.nagKillerTest052Enabled);
-  prefs.putBool("nagT370", c.nagKillerTest370Enabled);
-  prefs.putUChar("nagMode", normalizeNagKillerMode(c.nagKillerMode));
-  prefs.putUShort("nagBurst", c.nagKillerBurstMs);
-  prefs.putUShort("nagPause", c.nagKillerPauseMs);
-  prefs.putUShort("nagBPos1", clampNagKillerTorqueCx100(c.nagKillerBPos1Cx100));
-  prefs.putUShort("nagBPos2", clampNagKillerTorqueCx100(c.nagKillerBPos2Cx100));
-  prefs.putUShort("nagBNeg1", clampNagKillerTorqueCx100(c.nagKillerBNeg1Cx100));
-  prefs.putUShort("nagBNeg2", clampNagKillerTorqueCx100(c.nagKillerBNeg2Cx100));
-  prefs.putUShort("nagCNeg", clampNagKillerTorqueCx100(c.nagKillerCNegCx100));
-  prefs.putUShort("nagCPos", clampNagKillerTorqueCx100(c.nagKillerCPosCx100));
+  prefs.putUChar("nagMode", NAG_KILLER_MODE_A);
+  prefs.putUShort("nagA1NMin", clampNagKillerTorqueCx100(c.nagKillerAHo1NegMinCx100));
+  prefs.putUShort("nagA1NMax", clampNagKillerTorqueCx100(c.nagKillerAHo1NegMaxCx100));
+  prefs.putUShort("nagA1PMin", clampNagKillerTorqueCx100(c.nagKillerAHo1PosMinCx100));
+  prefs.putUShort("nagA1PMax", clampNagKillerTorqueCx100(c.nagKillerAHo1PosMaxCx100));
+  prefs.putUShort("nagA2NMin", clampNagKillerTorqueCx100(c.nagKillerAHo2NegMinCx100));
+  prefs.putUShort("nagA2NMax", clampNagKillerTorqueCx100(c.nagKillerAHo2NegMaxCx100));
+  prefs.putUShort("nagA2PMin", clampNagKillerTorqueCx100(c.nagKillerAHo2PosMinCx100));
+  prefs.putUShort("nagA2PMax", clampNagKillerTorqueCx100(c.nagKillerAHo2PosMaxCx100));
   prefs.putBool("gearInject", c.scrollGearInjectEnabled);
   prefs.putBool("can1RxOnly", c.can1ReceiveOnly);
   prefs.end();

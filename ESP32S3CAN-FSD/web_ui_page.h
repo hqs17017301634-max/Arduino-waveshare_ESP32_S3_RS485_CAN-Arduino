@@ -87,22 +87,19 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="card">
 <h2>Nag-Killer 扭矩</h2>
 <label>Nag-Killer扭矩总开关<input type="checkbox" id="nagKillerEnabled"></label>
-<label>0x052 扭矩发送测试<input type="checkbox" id="nagKillerTest052Enabled"></label>
-<label>0x370 扭矩发送测试<input type="checkbox" id="nagKillerTest370Enabled"></label>
 <label>座舱摄像头始终关闭<input type="checkbox" id="cabinCameraDisableEnabled"></label>
 <p class="hint">座舱摄像头始终关闭走 bus=1/TWAI/物理CANB 的 0x3FD mux1 bit43；开启后每帧写 0。</p>
-<label>方案<select id="nagKillerMode"><option value="1">Mode B：0x052 burst/pause</option><option value="2">Mode C：0x370 hands-on状态机</option><option value="3">Mode D：文档0x370状态机</option></select></label>
-<label>Mode B 注入窗口 ms<input type="number" id="nagKillerBurstMs" min="50" max="10000"></label>
-<label>Mode B 休息窗口 ms<input type="number" id="nagKillerPauseMs" min="0" max="10000"></label>
-<h3>Mode B 扭矩 Nm</h3>
-<label>第1正扭矩<span class="signed"><b>+</b><input type="number" id="nagKillerBPos1Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>第2正扭矩<span class="signed"><b>+</b><input type="number" id="nagKillerBPos2Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>第1负扭矩<span class="signed"><b>-</b><input type="number" id="nagKillerBNeg1Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>第2负扭矩<span class="signed"><b>-</b><input type="number" id="nagKillerBNeg2Nm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<h3>Mode C 扭矩 Nm</h3>
-<label>负端<span class="signed"><b>-</b><input type="number" id="nagKillerCNegNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<label>正端<span class="signed"><b>+</b><input type="number" id="nagKillerCPosNm" min="0" max="2.8" step="0.01"><em>Nm</em></span></label>
-<p class="hint">默认关闭。T-2CAN 上 Nag-Killer 发送走 bus=2/MCP2515/物理CANA。Mode B 在 AP/FSD active 且 0x399 新鲜时，对 0x052 做 burst/pause 扭矩循环。Mode C 对 0x370：AP/FSD active 后前5秒按 Mode A 固定+1.80Nm/L1，之后进入原状态机。Mode D 对 0x370 做文档状态机：state1保持500ms，state2延迟2秒后0.5..2.0Nm随机，state3/4/5延迟1秒后ramp/hold到2.1Nm。Nag-Killer联动滚轮开关打开后，识别到 0x399 hands-on state 2..6 或 9..10 会触发 2 轮音量滚轮免打扰，回到 0/1 会停止待触发动作，稳定离开约2秒后才会重新触发。测试开关打开后，收到对应 0x052/0x370 原车帧就直接发送当前设置扭矩，不等待 AP、hands-on、转角或 burst/rest 条件。所有扭矩框输入范围 0..2.8Nm，左侧固定符号自动生效。</p>
+<h3>NAG A：HandsOn 1 范围 Nm</h3>
+<label>负向 Min<span class="signed"><b>-</b><input type="number" id="nagKillerAHo1NegMinNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<label>负向 Max<span class="signed"><b>-</b><input type="number" id="nagKillerAHo1NegMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<label>正向 Min<span class="signed"><b>+</b><input type="number" id="nagKillerAHo1PosMinNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<label>正向 Max<span class="signed"><b>+</b><input type="number" id="nagKillerAHo1PosMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<h3>NAG A：HandsOn 2 范围 Nm</h3>
+<label>负向 Min<span class="signed"><b>-</b><input type="number" id="nagKillerAHo2NegMinNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<label>负向 Max<span class="signed"><b>-</b><input type="number" id="nagKillerAHo2NegMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<label>正向 Min<span class="signed"><b>+</b><input type="number" id="nagKillerAHo2PosMinNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<label>正向 Max<span class="signed"><b>+</b><input type="number" id="nagKillerAHo2PosMaxNm" min="0" max="1.8" step="0.01"><em>Nm</em></span></label>
+<p class="hint">默认关闭。NAG A 只处理 PT CAN 上的 0x370：收到原车 0x370 后复制原帧，只改扭矩字段、counter 和 checksum，再回发；当前版本不主动写 data[4] handsOn 位。FSD/AP active 后前 8 秒使用正向范围随机值，默认 1.50..1.80Nm；之后 angle&gt;0 用负向范围，angle&lt;=0 用正向范围。handsOnState=1 使用 HandsOn 1 范围，handsOnState=2 使用 HandsOn 2 范围，其它按 HandsOn 1 处理。最大绝对扭矩 1.80Nm。</p>
 </div>
 
 <div class="card">
@@ -269,7 +266,7 @@ function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")re
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerTest052Enabled","nagKillerTest370Enabled","nagKillerMode","nagKillerBurstMs","nagKillerPauseMs","nagKillerBPos1Nm","nagKillerBPos2Nm","nagKillerBNeg1Nm","nagKillerBNeg2Nm","nagKillerCNegNm","nagKillerCPosNm","scrollGearInjectEnabled","can1ReceiveOnly"];
+const cfgIds=["fsdEnabled","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","overtakeLightAlwaysOnEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","dndEnabled","nagKillerDndEnabled","nagKillerEnabled","nagKillerAHo1NegMinNm","nagKillerAHo1NegMaxNm","nagKillerAHo1PosMinNm","nagKillerAHo1PosMaxNm","nagKillerAHo2NegMinNm","nagKillerAHo2NegMaxNm","nagKillerAHo2PosMinNm","nagKillerAHo2PosMaxNm","scrollGearInjectEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
@@ -370,7 +367,7 @@ if(k==="batteryPreheatUiPowerW"||k==="batteryPreheatCmdPowerW")return v<=-32000?
 if(k==="batteryPreheatUiTargetCx100"||k==="batteryPreheatCmdTargetCx100"||k==="batteryPreheatVcfrontCoolantBatInletCx100"||k==="batteryPreheatVcfrontCoolantPtInletCx100"||k==="batteryPreheatVcfrontAmbientCx100"||k==="batteryPreheatVcfrontAmbientFilteredCx100"||k==="bmsTempMinCx100"||k==="bmsTempAvgCx100"||k==="bmsTempMaxCx100")return cx100(v);
 if(k==="dndActionType")return ["none","volume"][v]||v;
 if(k==="dndBlocked")return ["ok","disabled","canb","no_cache"][v]||v;
-if(k==="nagKillerMode")return ["","Mode B","Mode C","Mode D"][v]||v;
+if(k==="nagKillerMode")return "NAG A";
 if(k==="nagKillerBlocked")return ["ok","disabled","bad_mode","ap_state","target_ho","rest","stale_0x399","stale_0x129","steer_angle","hands_state","tx_blocked","bad_dlc"][v]||v;
 if(k==="nagKillerSetHandsOn")return v?("L"+v):"否";
 if(k==="nagKillerActive"||k==="nagKillerBurstActive")return yesNo(v);

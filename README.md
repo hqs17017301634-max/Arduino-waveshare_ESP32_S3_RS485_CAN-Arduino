@@ -44,7 +44,7 @@ Vehicle-side CAN binding must be documented by the CAN ID/function, not only by 
 | Firmware bus | Vehicle network where the function takes effect | X179 pins | CAN IDs / functions |
 |---|---|---|---|
 | `bus=1` / TWAI | CH CAN | PIN `13 / 14` | All CAN1 functions |
-| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer torque targets: `0x052`, `0x370` |
+| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer A torque target: `0x370` |
 | `bus=2` / MCP2515 | BODY CAN | PIN `9 / 10` | Scroll/stalk/light/preheat/service functions: `0x3C2`, `0x229`, `0x249`, `0x273`, `0x082`, `0x339` |
 
 `bus=2` is one MCP2515 physical channel. It can be wired to PT CAN or BODY CAN for a test/install, but one MCP2515 channel cannot be on both vehicle networks at the same time.
@@ -138,7 +138,7 @@ Implemented `bus=2` features:
 - **Scroll gear injection (`0x229`)**: experimental, default off. With brake pressed, right-scroll back requests R and right-scroll forward requests D. Injection is allowed only when FSD injection is disabled, or when the latest `0x399 DAS_autopilotState` is normal/non-active (`0=DISABLED`, `1=UNAVAILABLE`, or `2=AVAILABLE`); active AP/FSD states block injection.
 - **Battery preheat (`0x082`)**: when enabled, sends fixed `AF 50 94 39 FF 03 83 05` on `bus=2` every 500 ms.
 - **DND volume mitigation (`0x399` + `0x3C2`)**: default off. Active AP/FSD state from `0x399` starts a random 1-5 s four-step left-scroll volume up/down sequence on `bus=2` `0x3C2`.
-- **Nag-Killer torque mitigation (`0x052` / `0x370`)**: experimental, default off. Mode B echoes `0x052` with burst/pause torque cycling; Mode C echoes `0x370` using the hands-on state machine.
+- **Nag-Killer A torque echo (`0x370`)**: experimental, default off. Copies each live PT-CAN `0x370` frame, rewrites only torque, counter, and checksum, then transmits the echo frame. It does not actively write the handsOn bits.
 - **Lock-triggered deep sleep**: when enabled, uses `0x339 VCSEC simplified lock status = 2 (LOCKED)` as the only lock trigger, but it must stay stable for 5 s and cabin-empty evidence must be present before CAN TX is inhibited and ESP32 deep sleep starts. Simplified status `1` is decoded as unlocked and resets the timer.
 
 ### Battery Preheat Details
@@ -167,16 +167,20 @@ The firmware requires a fresh live `0x3C2` mux1 cache before sending DND frames.
 
 ### Nag-Killer Torque Mitigation
 
-This feature is experimental and defaults off. It uses `bus=1` / TWAI / physical CANB and always sends through the normal `twai_send()` gate, so `can1ReceiveOnly` blocks its TX.
+This feature is experimental and defaults off. On T-2CAN it targets PT CAN on `bus=2` / MCP2515 / physical CANA and only processes live `0x370` frames.
 
-- Mode B target: `0x052`; requires fresh `0x399` AP/FSD active state. Default cadence is 1000 ms injection and 1500 ms rest. During injection it cycles the WebUI torque points, defaulting to `+1.80`, `+1.50`, `-1.50`, `-1.80` Nm, and sets handsOn.
-- Mode C target: `0x370`; requires fresh `0x399` and AP/FSD active. For the first 5 s after AP/FSD becomes active it behaves like Mode A: fixed `+1.80 Nm` with HandsOnLevel `L1`. After that startup window it requires fresh `0x129`, uses `0x399 data[5] >> 2 & 0x0F` for hands-on state, waits 2 s in state 2 before mild random-walk torque, and waits 1 s in state 3 before a WebUI-configurable sweep, defaulting to `-1.8..+1.8 Nm`.
-- Mode D target: `0x370`; implements the imported document state machine while keeping this car's `0x399` context source. State 1 holds the previous synthetic torque/HandsOnLevel for 500 ms, state 2 waits 2 s then random-walks `0.5..2.0 Nm`, and states 3/4/5 wait 1 s then ramp/hold to `2.1 Nm`.
-- `0x129` steering angle follows the DBC signal `SCCM_steeringAngle : 16|14@1+ (0.1,-819.2)`, so the firmware decodes the low 14 bits from `data[2..3]`.
-- WebUI torque fields all take magnitude values from `0..2.8 Nm`; the fixed `+` / `-` marker beside each field decides the actual sign.
-- WebUI also has independent `0x052` and `0x370` torque-send test switches. When enabled, the firmware sends the configured torque on every matching live target frame without waiting for AP state, hands-on state, steering angle, or burst/rest timing. It still copies the live target frame and still goes through `twai_send()`, so `can1ReceiveOnly` blocks test TX too.
-- Bus=1 software filtering includes `0x313` for EPAS/Nag-Killer capture diagnostics.
-- All modes copy the live target frame, modify torque bytes, update HandsOnLevel in `data[4]` when needed, increment the low-nibble counter in `data[6]`, and recalculate checksum as `sum(data[0..6]) + 0x73`.
+- Target frame: PT CAN `0x370`.
+- Frame handling: copy the live frame, rewrite torque bytes, increment the low-nibble counter in `data[6]`, recalculate checksum as `sum(data[0..6]) + 0x73`, and transmit the echo frame.
+- It does not actively modify `data[4]` handsOn bits.
+- Torque field: `data[2]` low nibble + `data[3]`; `Nm = raw * 0.01 - 20.5`.
+- Max absolute output torque is `1.80 Nm`.
+- Requires fresh `0x399` and AP/FSD active.
+- During the first 8 seconds after AP/FSD enters active, it uses the positive torque range, default `1.50..1.80 Nm`.
+- After startup, it requires fresh `0x129` steering angle. If `angle > 0`, it uses the negative torque range; if `angle <= 0`, it uses the positive torque range.
+- WebUI has two independent range sets:
+  - handsOnState `1`: `- Min / - Max / + Min / + Max`.
+  - handsOnState `2`: `- Min / - Max / + Min / + Max`.
+  - other handsOn states use the handsOnState `1` range.
 
 ### Lock Deep Sleep
 
@@ -316,7 +320,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 | 固件通道 | 功能实际生效的车辆网络 | X179 针脚 | CAN ID / 功能 |
 |---|---|---|---|
 | `bus=1` / TWAI | CH CAN | PIN `13 / 14` | CAN1 所有功能 |
-| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer 扭矩目标帧：`0x052`、`0x370` |
+| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer A 扭矩目标帧：`0x370` |
 | `bus=2` / MCP2515 | BODY CAN | PIN `9 / 10` | 滚轮、拨杆、灯光、电池预热、维修模式：`0x3C2`、`0x229`、`0x249`、`0x273`、`0x082`、`0x339` |
 
 `bus=2` 是一路 MCP2515 物理 CAN。它可以按测试/安装需要接到 PT CAN 或 BODY CAN，但一路 MCP2515 不能同时接在两个车辆网络上。
@@ -410,7 +414,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 - **滚轮换挡注入（`0x229`）**：实验功能，默认关闭。踩刹车时，右滚轮向后请求 R，向前请求 D。只有 FSD 注入关闭，或最新 `0x399 DAS_autopilotState` 处于正常/非接管状态（`0=DISABLED`、`1=UNAVAILABLE`、`2=AVAILABLE`）时才允许注入；AP/FSD active 状态会阻止注入。
 - **电池预热（`0x082`）**：启用后，每 500 ms 在 `bus=2` 固定发送 `AF 50 94 39 FF 03 83 05`。
 - **音量免打扰（`0x399` + `0x3C2`）**：默认关闭。`0x399` 显示 AP/FSD active 后，随机 1-5 秒在 `bus=2` `0x3C2` 发送四步左滚轮音量加减序列。
-- **Nag-Killer 扭矩免打扰（`0x052` / `0x370`）**：实验功能，默认关闭。Mode B 对 `0x052` 做 burst/pause 扭矩循环；Mode C 对 `0x370` 做 hands-on 状态机。
+- **Nag-Killer A 扭矩回显（`0x370`）**：实验功能，默认关闭。复制 PT CAN 原车 `0x370`，只改扭矩、counter、checksum 后回发；当前版本不主动写 handsOn 位。
 - **锁车触发 deep sleep**：启用后，仍只把 `0x339 VCSEC 简化锁状态 = 2（锁定）` 作为锁车触发来源，但必须连续稳定 5 秒，并且座椅/驾驶员状态确认车内无人后，才禁止所有 CAN TX、关闭 WiFi/TWAI，并进入 ESP32 deep sleep。简化状态 `1` 解码为解锁，会重置计时。
 
 ### 电池预热细节
@@ -439,15 +443,20 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 
 ### Nag-Killer 扭矩免打扰
 
-此功能为实验功能，默认关闭。它使用 `bus=1` / TWAI / 物理 CANB，所有发送都经过现有 `twai_send()`，因此打开 `can1ReceiveOnly` 会阻止扭矩 TX。
+此功能为实验功能，默认关闭。T-2CAN 上目标为 `bus=2` / MCP2515 / 物理 CANA 接 PT CAN，只处理原车 `0x370`。
 
-- Mode B 目标：`0x052`；要求新鲜的 `0x399` 且 AP/FSD active。默认 1000 ms 注入、1500 ms 休息；注入窗口内循环 WebUI 扭矩点，默认 `+1.80`、`+1.50`、`-1.50`、`-1.80` Nm，并设置 handsOn。
-- Mode C 目标：`0x370`；要求新鲜的 `0x399` 且 AP/FSD active。AP/FSD 进入 active 后前 5 秒按 Mode A 执行：固定 `+1.80 Nm` 并写 HandsOnLevel `L1`。5 秒启动窗口后要求新鲜的 `0x129` 转角，hands-on 状态使用 `0x399 data[5] >> 2 & 0x0F`；状态 2 等待 2 秒后轻微随机扭矩，状态 3 等待 1 秒后按 WebUI 可调范围扫动，默认 `-1.8..+1.8 Nm`。
-- Mode D 目标：`0x370`；实现导入文档的状态机，但状态来源仍使用本车验证过的 `0x399`。state 1 保持上次合成扭矩/HandsOnLevel 500 ms，state 2 等 2 秒后 `0.5..2.0 Nm` 随机游走，state 3/4/5 等 1 秒后 ramp/hold 到 `2.1 Nm`。
-- WebUI 扭矩框都填写 `0..2.8 Nm` 的幅值；每个输入框左侧固定的 `+` / `-` 标识决定实际正负号。
-- WebUI 另有独立的 `0x052` 和 `0x370` 扭矩发送测试开关。打开后，收到对应原车目标帧就直接发送当前设置扭矩，不等待 AP 状态、hands-on 状态、方向盘角度或 burst/rest 时间窗口。测试仍然复制原车目标帧并经过 `twai_send()`，所以 `can1ReceiveOnly` 也会阻止测试 TX。
-- bus=1 软件过滤已包含 `0x313`，用于 EPAS / Nag-Killer 抓包诊断。
-- 所有模式都会复制原车目标帧，只修改扭矩字节，必要时更新 `data[4]` 的 HandsOnLevel，递增 `data[6]` 低 4 位 counter，并按 `sum(data[0..6]) + 0x73` 重算 checksum。
+- 目标帧：PT CAN `0x370`。
+- 处理方式：复制原车帧，只改扭矩字节、`data[6]` 低 4 位 counter、`data[7]` checksum，然后回发。
+- 当前版本不主动修改 `data[4]` handsOn 位。
+- 扭矩字段：`data[2]` 低 4 bit + `data[3]`；换算 `Nm = raw * 0.01 - 20.5`。
+- 最大绝对输出扭矩为 `1.80 Nm`。
+- 要求 `0x399` 新鲜且 AP/FSD active。
+- AP/FSD 刚进入 active 后前 8 秒使用正向扭矩区间随机值，默认 `1.50..1.80 Nm`。
+- 8 秒后要求 `0x129` 方向盘角度新鲜；`angle > 0` 用负向区间，`angle <= 0` 用正向区间。
+- WebUI 有两套独立范围：
+  - handsOnState `1`：`- Min / - Max / + Min / + Max`。
+  - handsOnState `2`：`- Min / - Max / + Min / + Max`。
+  - 其他 handsOnState 按 handsOnState `1` 范围处理。
 
 ### 锁车 Deep Sleep
 

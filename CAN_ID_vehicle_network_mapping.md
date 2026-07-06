@@ -19,7 +19,7 @@ vehicle network where it actually takes effect.
 | Firmware bus / 固件通道 | Effective vehicle network / 生效车辆网络 | X179 wiring / 接线 | Current function group / 当前功能组 | CAN IDs |
 |---|---|---|---|---|
 | `CAN1` / TWAI | CH CAN | X179 PIN `13 / 14` | All CAN1 functions / CAN1 所有功能 | Follow the CAN1 feature definitions |
-| `CAN2` / MCP2515 | PT CAN | X179 PIN `2 / 3` | Nag-Killer torque targets / Nag-Killer 扭矩目标帧 | `0x052`, `0x370` |
+| `CAN2` / MCP2515 | PT CAN | X179 PIN `2 / 3` | Nag-Killer A torque target / Nag-Killer A 扭矩目标帧 | `0x370` |
 | `CAN2` / MCP2515 | BODY CAN | X179 PIN `9 / 10` | Scroll, stalk, lighting, battery preheat, service mode / 滚轮、拨杆、灯光、电池预热、维修模式 | `0x3C2`, `0x229`, `0x249`, `0x273`, `0x082`, `0x339` |
 
 ## Practical Rule / 实际规则
@@ -28,10 +28,10 @@ vehicle network where it actually takes effect.
   CAN controller is wired there.
 - 先按 CAN ID / 功能确认车辆网络，再决定开发板哪一路 CAN 接到这组针脚。
 - `CAN2` / MCP2515 is only one physical CAN channel. If it is connected to PT CAN
-  at X179 PIN `2 / 3`, only the PT CAN functions such as `0x052` / `0x370` can
+  at X179 PIN `2 / 3`, only the PT CAN functions such as NAG A `0x370` can
   take effect on that wiring.
 - `CAN2` / MCP2515 只有一路物理 CAN。如果它接到 X179 PIN `2 / 3` 的 PT CAN，
-  那这次接线下只有 `0x052` / `0x370` 这类 PT CAN 功能会生效。
+  那这次接线下只有 NAG A `0x370` 这类 PT CAN 功能会生效。
 - If `CAN2` / MCP2515 is connected to BODY CAN at X179 PIN `9 / 10`, BODY CAN
   functions such as `0x3C2`, `0x229`, `0x249`, `0x273`, `0x082`, and `0x339`
   can take effect, while PT CAN torque targets will not.
@@ -47,7 +47,7 @@ vehicle network as the current wiring:
 
 | Symptom / 现象 | First check / 优先检查 |
 |---|---|
-| `0x052` / `0x370` torque does not work / 扭矩不生效 | Is CAN2 wired to PT CAN X179 PIN `2 / 3`? / CAN2 是否接到 PT CAN X179 PIN `2 / 3` |
+| `0x370` torque does not work / 扭矩不生效 | Is CAN2 wired to PT CAN X179 PIN `2 / 3`? / CAN2 是否接到 PT CAN X179 PIN `2 / 3` |
 | `0x082` preheat does not work / 电池预热不生效 | Is CAN2 wired to BODY CAN X179 PIN `9 / 10`? / CAN2 是否接到 BODY CAN X179 PIN `9 / 10` |
 | `0x3C2` scroll or hazard does not work / 滚轮或双闪不生效 | Is CAN2 wired to BODY CAN X179 PIN `9 / 10`? / CAN2 是否接到 BODY CAN X179 PIN `9 / 10` |
 | CAN1 function does not work / CAN1 功能不生效 | Is CAN1 wired to CH CAN X179 PIN `13 / 14`? / CAN1 是否接到 CH CAN X179 PIN `13 / 14` |
