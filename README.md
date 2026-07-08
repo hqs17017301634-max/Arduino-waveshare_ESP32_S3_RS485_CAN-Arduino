@@ -44,7 +44,7 @@ Vehicle-side CAN binding must be documented by the CAN ID/function, not only by 
 | Firmware bus | Vehicle network where the function takes effect | X179 pins | CAN IDs / functions |
 |---|---|---|---|
 | `bus=1` / TWAI | CH CAN | PIN `13 / 14` | All CAN1 functions |
-| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer torque targets: `0x052`, `0x370` |
+| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Not used by this branch; Nag-Killer torque output was removed |
 | `bus=2` / MCP2515 | BODY CAN | PIN `9 / 10` | Scroll/stalk/light/preheat/service functions: `0x3C2`, `0x229`, `0x249`, `0x273`, `0x082`, `0x339` |
 
 `bus=2` is one MCP2515 physical channel. It can be wired to PT CAN or BODY CAN for a test/install, but one MCP2515 channel cannot be on both vehicle networks at the same time.
@@ -57,7 +57,7 @@ Vehicle-side CAN binding must be documented by the CAN ID/function, not only by 
 | Primary CAN | `bus=1` / TWAI / physical CANB | Handles FSD activation, speed profile, speed offset, brake/gear context, and TWAI recovery. |
 | Secondary CAN | `bus=2` / MCP2515 / physical CANA | Handles PT torque targets or BODY body/lighting/preheat/service-mode features according to X179 wiring. |
 | WebUI | Low-priority FreeRTOS task on core 0 | Serves the SoftAP page, reads cached status, updates runtime config, and never runs inside the CAN fast path. |
-| Recorder | PSRAM buffer | Stores binary CAN frames first; CSV is formatted only during HTTP download after recording stops. |
+| Recorder | PSRAM buffer | Backend remains available, but the WebUI capture card is hidden in this branch. |
 
 No OTA, SPIFFS, LittleFS, arbitrary CAN-send page, cross-bus bridge, or MITM rewrite is included in this branch.
 
@@ -135,10 +135,10 @@ Implemented `bus=2` features:
 - **Flash-to-pass strobe (`0x249`)**: when armed, two pull events within 1.2 s trigger 8 PULL/idle pulses. Default cadence is 75 ms ON / 75 ms OFF.
 - **Rear-fog deceleration strobe (`0x273`)**: when armed, mild deceleration triggers 3 pulses and hard deceleration triggers 5 pulses. Cadence is 500 ms.
 - **Reverse hazard + rear-fog strobe**: when armed, reverse gear on `bus=1` `0x118`, or brake + right-scroll back on `bus=2` `0x3C2`, triggers hazard and rear-fog pulses.
-- **Scroll gear injection (`0x229`)**: experimental, default off. With brake pressed, right-scroll back requests R and right-scroll forward requests D. Injection is allowed only when FSD injection is disabled, or when the latest `0x399 DAS_autopilotState` is normal/non-active (`0=DISABLED`, `1=UNAVAILABLE`, or `2=AVAILABLE`); active AP/FSD states block injection.
+- **Scroll gear injection (`0x229`)**: removed from the WebUI and forced off at runtime in this branch.
 - **Battery preheat (`0x082`)**: when enabled, sends fixed `AF 50 94 39 FF 03 83 05` on `bus=2` every 500 ms.
-- **DND volume mitigation (`0x399` + `0x3C2`)**: default off. Active AP/FSD state from `0x399` starts a random 1-5 s four-step left-scroll volume up/down sequence on `bus=2` `0x3C2`.
-- **Nag-Killer torque mitigation (`0x052` / `0x370`)**: experimental, default off. Mode B echoes `0x052` with burst/pause torque cycling; Mode C echoes `0x370` using the hands-on state machine.
+- **Do Not Disturb (`0x3FD` + `0x399` + `0x3C2`)**: one WebUI switch closes the cabin camera bit and enables Nag-linked wheel DND. Hands-on states `3..6` and `9..10` trigger one wheel action every 0.5 s until the state returns to `1` or `2`.
+- **Nag-Killer torque mitigation (`0x052` / `0x370`)**: removed from this branch; WebUI torque controls and runtime target-frame sending are disabled.
 - **Lock-triggered deep sleep**: when enabled, uses `0x339 VCSEC simplified lock status = 2 (LOCKED)` as the only lock trigger, but it must stay stable for 5 s and cabin-empty evidence must be present before CAN TX is inhibited and ESP32 deep sleep starts. Simplified status `1` is decoded as unlocked and resets the timer.
 
 ### Battery Preheat Details
@@ -153,30 +153,21 @@ The firmware uses the fixed `0x082` payload verified on the vehicle. The old dyn
 
 Set MCP2515 hardware filter to capture/debug when testing BMS temperature diagnostics, because `0x712` and other BMS candidate IDs are not in the current feature filter set.
 
-### DND Volume Mitigation
+### Nag-Linked Wheel DND
 
-The DND feature is volume-only; it does not inject steering torque.
+The remaining DND feature is Nag-linked and volume-only; it does not inject steering torque.
 
 - Status source: `bus=1` / TWAI / physical CANB, `0x399`.
-- Volume trigger: active AP/FSD state from `0x399` starts an automatic random 1-5 s repeat.
+- Volume trigger: hands-on states `3..6` and `9..10` from `0x399` trigger one wheel action every 0.5 s until the state returns to `1` or `2`.
 - Output path: `bus=2` / MCP2515 / physical CANA, latest live `0x3C2` mux1 scroll frame.
 - Volume action: `data[2] = 0x01 -> 0x00 -> 0x3F -> 0x00`.
 - Step interval: 50 ms.
 
 The firmware requires a fresh live `0x3C2` mux1 cache before sending DND frames. The observed vehicle payload keeps the scroll frame checksum/counter bytes stable while `data[2]` changes, so this implementation copies the live frame and only modifies the left-scroll tick byte.
 
-### Nag-Killer Torque Mitigation
+### Removed Nag-Killer Torque Mitigation
 
-This feature is experimental and defaults off. It uses `bus=1` / TWAI / physical CANB and always sends through the normal `twai_send()` gate, so `can1ReceiveOnly` blocks its TX.
-
-- Mode B target: `0x052`; requires fresh `0x399` AP/FSD active state. Default cadence is 1000 ms injection and 1500 ms rest. During injection it cycles the WebUI torque points, defaulting to `+1.80`, `+1.50`, `-1.50`, `-1.80` Nm, and sets handsOn.
-- Mode C target: `0x370`; requires fresh `0x399` and AP/FSD active. For the first 5 s after AP/FSD becomes active it behaves like Mode A: fixed `+1.80 Nm` with HandsOnLevel `L1`. After that startup window it requires fresh `0x129`, uses `0x399 data[5] >> 2 & 0x0F` for hands-on state, waits 2 s in state 2 before mild random-walk torque, and waits 1 s in state 3 before a WebUI-configurable sweep, defaulting to `-1.8..+1.8 Nm`.
-- Mode D target: `0x370`; implements the imported document state machine while keeping this car's `0x399` context source. State 1 holds the previous synthetic torque/HandsOnLevel for 500 ms, state 2 waits 2 s then random-walks `0.5..2.0 Nm`, and states 3/4/5 wait 1 s then ramp/hold to `2.1 Nm`.
-- `0x129` steering angle follows the DBC signal `SCCM_steeringAngle : 16|14@1+ (0.1,-819.2)`, so the firmware decodes the low 14 bits from `data[2..3]`.
-- WebUI torque fields all take magnitude values from `0..2.8 Nm`; the fixed `+` / `-` marker beside each field decides the actual sign.
-- WebUI also has independent `0x052` and `0x370` torque-send test switches. When enabled, the firmware sends the configured torque on every matching live target frame without waiting for AP state, hands-on state, steering angle, or burst/rest timing. It still copies the live target frame and still goes through `twai_send()`, so `can1ReceiveOnly` blocks test TX too.
-- Bus=1 software filtering includes `0x313` for EPAS/Nag-Killer capture diagnostics.
-- All modes copy the live target frame, modify torque bytes, update HandsOnLevel in `data[4]` when needed, increment the low-nibble counter in `data[6]`, and recalculate checksum as `sum(data[0..6]) + 0x73`.
+Nag-Killer torque output and the `0x052` / `0x370` torque-test controls were removed from this branch. The source still keeps shared status/context helpers used by Nag-linked wheel DND, but target-frame torque sending is no longer called.
 
 ### Lock Deep Sleep
 
@@ -226,17 +217,17 @@ The WebUI exposes:
 - CANB filter mode,
 - service mode,
 - lighting/strobe features,
-- scroll gear injection,
+- scroll gear injection is hidden/disabled in this branch,
 - battery preheat,
-- DND volume mitigation,
+- Do Not Disturb: cabin camera off + Nag-linked wheel DND,
 - lock deep sleep,
 - receive-only TWAI mode,
 - status counters,
-- PSRAM recorder controls.
+- recorder backend is present, but WebUI capture controls are hidden.
 
 ### Recorder
 
-The WebUI build includes a lightweight dual-bus CSV recorder:
+The WebUI capture card is hidden in this branch. The backend recorder code remains in the firmware for branch reuse and diagnostics builds:
 
 - stores binary frames in PSRAM first,
 - supports include filters and excludes,
@@ -316,7 +307,7 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 | 固件通道 | 功能实际生效的车辆网络 | X179 针脚 | CAN ID / 功能 |
 |---|---|---|---|
 | `bus=1` / TWAI | CH CAN | PIN `13 / 14` | CAN1 所有功能 |
-| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | Nag-Killer 扭矩目标帧：`0x052`、`0x370` |
+| `bus=2` / MCP2515 | PT CAN | PIN `2 / 3` | 当前分支不使用；Nag-Killer 扭矩输出已删除 |
 | `bus=2` / MCP2515 | BODY CAN | PIN `9 / 10` | 滚轮、拨杆、灯光、电池预热、维修模式：`0x3C2`、`0x229`、`0x249`、`0x273`、`0x082`、`0x339` |
 
 `bus=2` 是一路 MCP2515 物理 CAN。它可以按测试/安装需要接到 PT CAN 或 BODY CAN，但一路 MCP2515 不能同时接在两个车辆网络上。
@@ -407,10 +398,10 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 - **超车灯爆闪（`0x249`）**：启用后，1.2 秒内两次 PULL 触发 8 次 PULL/idle 脉冲，默认 75 ms 开 / 75 ms 关。
 - **后雾灯减速爆闪（`0x273`）**：启用后，缓减速触发 3 次，急减速触发 5 次，节奏 500 ms。
 - **倒车双闪 + 后雾灯爆闪**：启用后，`bus=1` `0x118` 倒挡，或刹车 + `bus=2` `0x3C2` 右滚轮向后，触发双闪和后雾灯脉冲。
-- **滚轮换挡注入（`0x229`）**：实验功能，默认关闭。踩刹车时，右滚轮向后请求 R，向前请求 D。只有 FSD 注入关闭，或最新 `0x399 DAS_autopilotState` 处于正常/非接管状态（`0=DISABLED`、`1=UNAVAILABLE`、`2=AVAILABLE`）时才允许注入；AP/FSD active 状态会阻止注入。
+- **滚轮换挡注入（`0x229`）**：已从 WebUI 删除，并在运行时强制关闭。
 - **电池预热（`0x082`）**：启用后，每 500 ms 在 `bus=2` 固定发送 `AF 50 94 39 FF 03 83 05`。
-- **音量免打扰（`0x399` + `0x3C2`）**：默认关闭。`0x399` 显示 AP/FSD active 后，随机 1-5 秒在 `bus=2` `0x3C2` 发送四步左滚轮音量加减序列。
-- **Nag-Killer 扭矩免打扰（`0x052` / `0x370`）**：实验功能，默认关闭。Mode B 对 `0x052` 做 burst/pause 扭矩循环；Mode C 对 `0x370` 做 hands-on 状态机。
+- **免打扰（`0x3FD` + `0x399` + `0x3C2`）**：一个 WebUI 开关同时关闭座舱摄像头位，并启用 Nag 联动滚轮免打扰。hands-on 状态 `3..6`、`9..10` 触发，每 0.5 秒执行 1 次滚轮动作，直到状态回到 `1` 或 `2`。
+- **Nag-Killer 扭矩免打扰（`0x052` / `0x370`）**：已从当前分支删除；WebUI 扭矩控件和目标帧发送入口已禁用。
 - **锁车触发 deep sleep**：启用后，仍只把 `0x339 VCSEC 简化锁状态 = 2（锁定）` 作为锁车触发来源，但必须连续稳定 5 秒，并且座椅/驾驶员状态确认车内无人后，才禁止所有 CAN TX、关闭 WiFi/TWAI，并进入 ESP32 deep sleep。简化状态 `1` 解码为解锁，会重置计时。
 
 ### 电池预热细节
@@ -425,29 +416,21 @@ LILYGO 官方物理端子名容易和旧项目文字混淆，本分支按下表�
 
 测试 BMS 温度诊断时，请把 MCP2515 硬件过滤设为抓包调试，因为 `0x712` 和其他 BMS 候选 ID 不在当前功能相关过滤集合里。
 
-### 音量免打扰
+### 免打扰
 
-免打扰只实现音量滚轮动作，不注入方向盘扭矩。
+当前免打扰由一个开关控制两件事：关闭座舱摄像头位，并启用 Nag 联动滚轮。滚轮部分只实现音量滚轮动作，不注入方向盘扭矩。
 
 - 状态来源：`bus=1` / TWAI / 物理 CANB，`0x399`。
-- 音量触发：`0x399` 显示 AP/FSD active 后，随机 1-5 秒自动重复一次。
+- 音量触发：`0x399` hands-on 状态 `3..6`、`9..10` 触发；每 0.5 秒执行 1 次滚轮动作，直到状态回到 `1` 或 `2`。
 - 输出路径：`bus=2` / MCP2515 / 物理 CANA，复用最新原车 `0x3C2` mux1 滚轮帧。
 - 音量动作：`data[2] = 0x01 -> 0x00 -> 0x3F -> 0x00`。
 - 步进间隔：50 ms。
 
 固件要求先收到新鲜的 `0x3C2` mux1 缓存才会发送免打扰帧。当前实车抓包显示 `data[2]` 变化时，滚轮帧的校验/计数字节保持稳定，所以实现方式为复制原车实时帧，只修改左滚轮 tick 字节。
 
-### Nag-Killer 扭矩免打扰
+### 已删除 Nag-Killer 扭矩免打扰
 
-此功能为实验功能，默认关闭。它使用 `bus=1` / TWAI / 物理 CANB，所有发送都经过现有 `twai_send()`，因此打开 `can1ReceiveOnly` 会阻止扭矩 TX。
-
-- Mode B 目标：`0x052`；要求新鲜的 `0x399` 且 AP/FSD active。默认 1000 ms 注入、1500 ms 休息；注入窗口内循环 WebUI 扭矩点，默认 `+1.80`、`+1.50`、`-1.50`、`-1.80` Nm，并设置 handsOn。
-- Mode C 目标：`0x370`；要求新鲜的 `0x399` 且 AP/FSD active。AP/FSD 进入 active 后前 5 秒按 Mode A 执行：固定 `+1.80 Nm` 并写 HandsOnLevel `L1`。5 秒启动窗口后要求新鲜的 `0x129` 转角，hands-on 状态使用 `0x399 data[5] >> 2 & 0x0F`；状态 2 等待 2 秒后轻微随机扭矩，状态 3 等待 1 秒后按 WebUI 可调范围扫动，默认 `-1.8..+1.8 Nm`。
-- Mode D 目标：`0x370`；实现导入文档的状态机，但状态来源仍使用本车验证过的 `0x399`。state 1 保持上次合成扭矩/HandsOnLevel 500 ms，state 2 等 2 秒后 `0.5..2.0 Nm` 随机游走，state 3/4/5 等 1 秒后 ramp/hold 到 `2.1 Nm`。
-- WebUI 扭矩框都填写 `0..2.8 Nm` 的幅值；每个输入框左侧固定的 `+` / `-` 标识决定实际正负号。
-- WebUI 另有独立的 `0x052` 和 `0x370` 扭矩发送测试开关。打开后，收到对应原车目标帧就直接发送当前设置扭矩，不等待 AP 状态、hands-on 状态、方向盘角度或 burst/rest 时间窗口。测试仍然复制原车目标帧并经过 `twai_send()`，所以 `can1ReceiveOnly` 也会阻止测试 TX。
-- bus=1 软件过滤已包含 `0x313`，用于 EPAS / Nag-Killer 抓包诊断。
-- 所有模式都会复制原车目标帧，只修改扭矩字节，必要时更新 `data[4]` 的 HandsOnLevel，递增 `data[6]` 低 4 位 counter，并按 `sum(data[0..6]) + 0x73` 重算 checksum。
+当前分支已删除 Nag-Killer 扭矩输出以及 `0x052` / `0x370` 扭矩测试控件。源码仍保留部分上下文/状态 helper，用于 Nag 联动滚轮免打扰，但目标帧扭矩发送入口不再调用。
 
 ### 锁车 Deep Sleep
 
@@ -497,17 +480,17 @@ WebUI 提供：
 - CANB 过滤模式，
 - Service Mode，
 - 灯光/爆闪功能，
-- 滚轮换挡注入，
+- 滚轮换挡注入已隐藏/禁用，
 - 电池预热，
-- 音量免打扰，
+- 免打扰：座舱摄像头关闭 + Nag联动滚轮，
 - 锁车 deep sleep，
 - TWAI 只收不发模式，
 - 状态计数器，
-- PSRAM 抓包控制。
+- 抓包后端仍保留，但 WebUI 抓包控件已隐藏。
 
 ### 抓包
 
-WebUI 构建包含轻量双路 CSV 抓包：
+当前分支隐藏 WebUI 抓包卡片。后端抓包代码仍保留，供其他分支或诊断构建复用：
 
 - 先把二进制帧保存到 PSRAM，
 - 支持 include 和 exclude ID 过滤，

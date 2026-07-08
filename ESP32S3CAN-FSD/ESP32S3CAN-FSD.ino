@@ -162,18 +162,16 @@ constexpr uint16_t NAG_KILLER_TORQUE_RAW_MIN =
     NAG_KILLER_TORQUE_RAW_BASE - NAG_KILLER_TORQUE_MAX_CX100;
 constexpr uint16_t NAG_KILLER_TORQUE_RAW_MAX =
     NAG_KILLER_TORQUE_RAW_BASE + NAG_KILLER_TORQUE_MAX_CX100;
-constexpr uint8_t NAG_DND_HANDS_PRIMARY_MIN = 2;
+constexpr uint8_t NAG_DND_HANDS_PRIMARY_MIN = 3;
 constexpr uint8_t NAG_DND_HANDS_PRIMARY_MAX = 6;
 constexpr uint8_t NAG_DND_HANDS_ESCALATED_MIN = 9;
 constexpr uint8_t NAG_DND_HANDS_ESCALATED_MAX = 10;
-constexpr uint8_t NAG_DND_ACTION_COUNT = 2;
-constexpr uint16_t NAG_DND_REARM_SAFE_MS = 2000;
+constexpr uint8_t NAG_DND_ACTION_COUNT = 1;
 constexpr uint8_t DAS_LC_REASON_DECODE_OK = 0;
 constexpr uint8_t DAS_LC_REASON_DECODE_NO_FRAME = 1;
 constexpr uint8_t DAS_LC_REASON_DECODE_BAD_DLC = 2;
 constexpr uint8_t DAS_LC_REASON_DECODE_NO_LAYOUT = 3;
 constexpr uint8_t DAS_LC_REASON_DECODE_INVALID_VALUE = 4;
-constexpr const char* HIDDEN_CONTROLS_PASSWORD = "teslacan123456";
 constexpr uint16_t FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS = 100;
 constexpr uint16_t FSD_ACTIVATION_RESEND_MIN_PERIOD_MS = 1;
 constexpr uint16_t FSD_ACTIVATION_RESEND_MAX_PERIOD_MS = 1000;
@@ -187,7 +185,6 @@ struct RuntimeConfig {
   bool fsdActivationResendEnabled = false;
   uint16_t fsdActivationResendMs = FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS;
   bool autoSpeedOffsetEnabled = true;
-  bool hiddenControlsUnlocked = false;
   bool cabinCameraDisableEnabled = false; // when enabled, write 0x3FD mux1 bit43 to 0
   uint8_t slewPctPerSec = 5;
   uint8_t lowSpeedMaxPctRaw = 200;    // = MAX_SPEED_OFFSET_PCT * OFFSET_PCT4_RAW_PER_PCT
@@ -208,11 +205,9 @@ struct RuntimeConfig {
   bool rearFogBrakeStrobeEnabled = false; // arms brake-triggered 0x273 rear fog burst
   bool reverseStrobeEnabled = false;  // arms reverse-gear hazard + rear-fog burst
   bool batteryPreheatEnabled = false; // sends fixed UI_tripPlanning 0x082 every 500 ms
-  bool disableTelemetryV1Enabled = false; // CH|VEH and CH|PARTY/PT mapped to CH
-  bool disableTelemetryV2Enabled = false; // CH|VEH mapped to VEH, CH|PARTY/PT mapped to CH
   bool dndEnabled = false;             // continuous left scroll up/down on 0x3C2
   bool nagKillerEnabled = false;       // experimental steering torque echo
-  bool nagKillerDndEnabled = false;    // 0x399 hands-on 2..6/9..10 triggers scroll DND actions
+  bool nagKillerDndEnabled = false;    // 0x399 hands-on 3..6/9..10 triggers scroll DND actions
   bool nagKillerTest052Enabled = false; // force-send configured 0x052 torque on live target frames
   bool nagKillerTest370Enabled = false; // force-send configured 0x370 torque on live target frames
   uint8_t nagKillerMode = NAG_KILLER_MODE_B; // 1=Mode B, 2=Mode C, 3=doc state machine
@@ -229,22 +224,6 @@ struct RuntimeConfig {
 };
 
 static RuntimeConfig g_config;
-
-static void normalizeDisableTelemetryConfig(RuntimeConfig& c) {
-  // The two mapping modes are mutually exclusive. Prefer V2 if stale saved
-  // preferences somehow have both set; the WebUI also enforces this.
-  if (c.disableTelemetryV2Enabled) c.disableTelemetryV1Enabled = false;
-
-  // Keep hidden features off unless the password-gated WebUI unlock is enabled.
-  if (!c.hiddenControlsUnlocked) {
-    c.cabinCameraDisableEnabled = false;
-    c.dndEnabled = false;
-    c.nagKillerEnabled = false;
-    c.nagKillerDndEnabled = false;
-    c.nagKillerTest052Enabled = false;
-    c.nagKillerTest370Enabled = false;
-  }
-}
 
 static uint8_t normalizeCanBFilterMode(uint8_t mode) {
   // Legacy saved value 2 used to mean "minimum"; map it to feature IDs.
@@ -354,11 +333,6 @@ struct RuntimeStatus {
   uint16_t fsdActivationResendPeriodMs = 0;
   uint32_t fsdActivationResendTxCount = 0;
   uint32_t fsdActivationResendLastTxAgeMs = 0;
-  uint32_t disableTelemetryTxCount = 0;
-  uint32_t disableTelemetryTxFail = 0;
-  uint32_t disableTelemetryLastId = 0;
-  uint8_t disableTelemetryLastBus = 0;
-  uint32_t disableTelemetryLastTxAgeMs = 0;
   uint32_t webTaskMaxUs = 0;
   uint32_t totalHeapBytes = 0;
   uint32_t freeHeapBytes = 0;
@@ -521,7 +495,13 @@ static inline RuntimeConfig configSnapshot() {
 }
 
 static inline void applyBuildModeGuards(RuntimeConfig& c) {
-  normalizeDisableTelemetryConfig(c);
+  c.dndEnabled = false;
+  c.nagKillerEnabled = false;
+  c.nagKillerTest052Enabled = false;
+  c.nagKillerTest370Enabled = false;
+  c.overtakeLightAlwaysOnEnabled = false;
+  c.scrollGearInjectEnabled = false;
+  c.nagKillerDndEnabled = c.cabinCameraDisableEnabled;
 }
 
 #ifdef ENABLE_LIGHT_WEBUI
@@ -648,7 +628,6 @@ static inline void recordCanFrame(const can_frame&, char, uint8_t) {}
 // ---- TWAI helpers ----
 
 static bool twaiRecoveryInProgress = false;
-static uint32_t disableTelemetryLastTxMs = 0;
 static uint32_t batteryPreheatLastSendMs = 0;
 static uint32_t batteryPreheatStartMs = 0;
 static uint32_t batteryPreheatTargetStableStartMs = 0;
@@ -704,7 +683,6 @@ static uint32_t nagKillerDndNextActionMs = 0;
 static uint32_t nagKillerDndLastTriggerMs = 0;
 static uint32_t nagKillerDndTriggerCount = 0;
 static bool nagKillerDndHandsRangeActive = false;
-static uint32_t nagKillerDndSafeSinceMs = 0;
 static uint32_t bms712TempLastRxMs = 0;
 static uint32_t bmsTempDecodedLastRxMs = 0;
 static int16_t bms712TempCx100[12] = {};
@@ -1418,25 +1396,18 @@ static void handleNagKillerContextFrame(const can_frame& frame, const RuntimeCon
     const bool handsStateTriggersDnd = nagKillerHandsStateTriggersDnd(handsOnState);
     if (!cfg.nagKillerDndEnabled) {
       nagKillerDndHandsRangeActive = false;
-      nagKillerDndSafeSinceMs = 0;
       clearNagKillerDndPendingActions();
     } else if (handsStateTriggersDnd) {
-      nagKillerDndSafeSinceMs = 0;
       if (!nagKillerDndHandsRangeActive) {
         triggerNagKillerDndBurst(now);
       }
       nagKillerDndHandsRangeActive = true;
+    } else if (handsOnState == 1 || handsOnState == 2) {
+      nagKillerDndHandsRangeActive = false;
+      clearNagKillerDndPendingActions();
     } else {
-      if (handsOnState <= 1) clearNagKillerDndPendingActions();
-      if (nagKillerDndHandsRangeActive) {
-        if (nagKillerDndSafeSinceMs == 0) nagKillerDndSafeSinceMs = now;
-        if ((now - nagKillerDndSafeSinceMs) >= NAG_DND_REARM_SAFE_MS) {
-          nagKillerDndHandsRangeActive = false;
-          nagKillerDndSafeSinceMs = 0;
-        }
-      } else {
-        nagKillerDndSafeSinceMs = 0;
-      }
+      nagKillerDndHandsRangeActive = false;
+      clearNagKillerDndPendingActions();
     }
 
     if (handsOnState != nagKillerHandsOnState) {
@@ -1856,156 +1827,6 @@ inline void setBit(can_frame& frame, int bit, bool value) {
   else frame.data[byteIndex] &= static_cast<uint8_t>(~mask);
 }
 
-static bool setBitIfPresent(can_frame& frame, uint8_t bit, bool value) {
-  if (static_cast<uint16_t>(bit) >= static_cast<uint16_t>(frame.can_dlc) * 8U) return false;
-  const uint8_t byteIndex = static_cast<uint8_t>(bit / 8);
-  const uint8_t bitIndex = static_cast<uint8_t>(bit % 8);
-  const uint8_t before = frame.data[byteIndex];
-  const uint8_t mask = static_cast<uint8_t>(1U << bitIndex);
-  frame.data[byteIndex] = value
-      ? static_cast<uint8_t>(before | mask)
-      : static_cast<uint8_t>(before & static_cast<uint8_t>(~mask));
-  return frame.data[byteIndex] != before;
-}
-
-static void advanceMaskedCounter(can_frame& frame, uint8_t byteIndex, uint8_t mask) {
-  if (byteIndex >= frame.can_dlc || mask == 0) return;
-  uint8_t shift = 0;
-  while (shift < 8 && (mask & (1U << shift)) == 0) shift++;
-  const uint8_t fieldMask = static_cast<uint8_t>(mask >> shift);
-  if (fieldMask == 0) return;
-  const uint8_t current = static_cast<uint8_t>((frame.data[byteIndex] >> shift) & fieldMask);
-  const uint8_t next = static_cast<uint8_t>((current + 1U) & fieldMask);
-  frame.data[byteIndex] = static_cast<uint8_t>(
-      (frame.data[byteIndex] & static_cast<uint8_t>(~mask)) |
-      ((next << shift) & mask));
-}
-
-static uint8_t vehicleChecksum(const can_frame& frame, uint8_t checksumByteIndex = 7) {
-  if (checksumByteIndex >= frame.can_dlc) return 0;
-  uint16_t sum = static_cast<uint16_t>(frame.can_id & 0xFF) +
-                 static_cast<uint16_t>((frame.can_id >> 8) & 0xFF);
-  for (uint8_t i = 0; i < frame.can_dlc; ++i) {
-    if (i == checksumByteIndex) continue;
-    sum += frame.data[i];
-  }
-  return static_cast<uint8_t>(sum & 0xFF);
-}
-
-static uint8_t disableTelemetryMode(const RuntimeConfig& cfg) {
-  if (cfg.disableTelemetryV2Enabled) return 2;
-  return cfg.disableTelemetryV1Enabled ? 1 : 0;
-}
-
-static bool disableTelemetryIdOnBus(uint8_t mode, uint8_t bus, uint32_t id) {
-  if (mode == 0) return false;
-  constexpr uint8_t BUS_CH = 1;
-  constexpr uint8_t BUS_VEH = 2;
-  switch (id) {
-    case CAN_ID_UI_DRIVER_ASSIST_CONTROL:
-    case CAN_ID_DAS_STATUS2:
-    case CAN_ID_USM_ALERT_MATRIX:
-      return bus == BUS_CH;
-    case CAN_ID_VCFRONT1_ALERT_MATRIX:
-    case CAN_ID_VCFRONT2_ALERT_MATRIX:
-    case CAN_ID_VCLEFT_ALERT_MATRIX:
-    case CAN_ID_VCRIGHT_ALERT_MATRIX:
-    case CAN_ID_EPBL_ALERT_MATRIX:
-    case CAN_ID_VCBATT0_ALERT_MATRIX:
-    case CAN_ID_VCBATT1_ALERT_MATRIX:
-    case CAN_ID_VCBATT2_ALERT_MATRIX:
-      return bus == BUS_VEH;
-    case CAN_ID_AP_CONTROL:
-    case CAN_ID_UI_VEHICLE_CONTROL2:
-    case CAN_ID_VCFRONT_ALERT_MATRIX:
-      return bus == (mode == 1 ? BUS_CH : BUS_VEH);
-    default:
-      return false;
-  }
-}
-
-static bool applyDisableTelemetryFrame(can_frame& frame, uint8_t bus, const RuntimeConfig& cfg) {
-  const uint8_t mode = disableTelemetryMode(cfg);
-  if (!disableTelemetryIdOnBus(mode, bus, frame.can_id)) return false;
-
-  const uint8_t original[8] = {
-    frame.data[0], frame.data[1], frame.data[2], frame.data[3],
-    frame.data[4], frame.data[5], frame.data[6], frame.data[7]
-  };
-
-  switch (frame.can_id) {
-    case CAN_ID_UI_DRIVER_ASSIST_CONTROL:
-      setBitIfPresent(frame, 19, false);
-      setBitIfPresent(frame, 42, false);
-      setBitIfPresent(frame, 43, false);
-      setBitIfPresent(frame, 44, false);
-      setBitIfPresent(frame, 55, false);
-      break;
-
-    case CAN_ID_AP_CONTROL:
-      if (frame.can_dlc < 7 || (frame.data[0] & 0x07) != 1) return false;
-      setBitIfPresent(frame, 48, false);
-      setBitIfPresent(frame, 50, false);
-      break;
-
-    case CAN_ID_DAS_STATUS2:
-      if (frame.can_dlc < 8) return false;
-      setBitIfPresent(frame, 13, false);
-      setBitIfPresent(frame, 34, false);
-      setBitIfPresent(frame, 35, false);
-      if (memcmp(original, frame.data, frame.can_dlc) != 0) {
-        advanceMaskedCounter(frame, 6, 0xF0);
-        frame.data[7] = vehicleChecksum(frame);
-      }
-      break;
-
-    case CAN_ID_UI_VEHICLE_CONTROL2:
-      setBitIfPresent(frame, 31, false);
-      break;
-
-    case CAN_ID_VCFRONT_ALERT_MATRIX:
-    case CAN_ID_VCFRONT1_ALERT_MATRIX:
-    case CAN_ID_VCFRONT2_ALERT_MATRIX:
-    case CAN_ID_VCLEFT_ALERT_MATRIX:
-    case CAN_ID_USM_ALERT_MATRIX:
-    case CAN_ID_VCRIGHT_ALERT_MATRIX:
-    case CAN_ID_EPBL_ALERT_MATRIX:
-    case CAN_ID_VCBATT0_ALERT_MATRIX:
-    case CAN_ID_VCBATT1_ALERT_MATRIX:
-    case CAN_ID_VCBATT2_ALERT_MATRIX:
-      if (frame.can_dlc < 5 || (frame.data[0] & 0x0F) != 0) return false;
-      setBitIfPresent(frame, 33, false);
-      break;
-
-    default:
-      return false;
-  }
-
-  return memcmp(original, frame.data, frame.can_dlc) != 0;
-}
-
-static bool sendDisableTelemetryFrame(const can_frame& frame, uint8_t bus) {
-  bool sent = false;
-  if (bus == 1) {
-    sent = twai_send(frame);
-  }
-#ifdef ENABLE_CANB_MCP2515
-  else if (bus == 2) {
-    sent = canbScheduleTx(frame, CANB_TX_SRC_OTHER, CANB_TX_PRIO_MED, CANB_TX_TTL_DEFAULT_MS, true);
-  }
-#endif
-
-  if (sent) {
-    g_status.disableTelemetryTxCount++;
-    g_status.disableTelemetryLastId = frame.can_id;
-    g_status.disableTelemetryLastBus = bus;
-    disableTelemetryLastTxMs = millis();
-  } else {
-    g_status.disableTelemetryTxFail++;
-  }
-  return sent;
-}
-
 static uint8_t fsdActivationResendCachedMuxMask() {
   uint8_t mask = 0;
   for (uint8_t i = 0; i < 3; ++i) {
@@ -2016,7 +1837,7 @@ static uint8_t fsdActivationResendCachedMuxMask() {
 
 static void cacheFsdActivationResendFrame(const can_frame& frame, uint8_t mux, const RuntimeConfig& cfg) {
   if (!cfg.fsdEnabled || !cfg.fsdActivationResendEnabled) return;
-  if (frame.can_id != CAN_ID_AP_CONTROL || frame.can_dlc < 8 || mux > 2) return;
+  if (frame.can_id != CAN_ID_AP_CONTROL || frame.can_dlc < 8 || mux != 0) return;
   fsdActivationResendFrames[mux] = frame;
   fsdActivationResendHasFrame[mux] = true;
 }
@@ -2044,9 +1865,8 @@ static void serviceFsdActivationResend(const RuntimeConfig& cfg) {
   if ((int32_t)(now - fsdActivationResendNextMs) < 0) return;
   fsdActivationResendNextMs = now + periodMs;
 
-  for (uint8_t i = 0; i < 3; ++i) {
-    if (!fsdActivationResendHasFrame[i]) continue;
-    if (twai_send(fsdActivationResendFrames[i])) {
+  if (fsdActivationResendHasFrame[0]) {
+    if (twai_send(fsdActivationResendFrames[0])) {
       fsdActivationResendTxCount++;
       fsdActivationResendLastTxMs = now;
     }
@@ -2328,8 +2148,6 @@ constexpr uint16_t SCROLL_GEAR_STATUS_FRAMES = 6;        // sustain detent longe
 constexpr uint16_t SCROLL_GEAR_COOLDOWN_MS = 400;  // responsive R<->D; one shift takes ~0.1-0.3s
 constexpr uint16_t DND_SCROLL_STEP_MS = 100;
 constexpr uint16_t DND_SCROLL_CACHE_MAX_AGE_MS = 1000;
-constexpr uint16_t DND_VOLUME_AUTO_MIN_MS = 1000;
-constexpr uint16_t DND_VOLUME_AUTO_MAX_MS = 5000;
 constexpr float SCROLL_GEAR_MAX_SPEED_KPH = 2.0f;
 constexpr float REAR_FOG_MILD_DECEL_THRESHOLD = -0.80f;
 constexpr float REAR_FOG_HARD_DECEL_THRESHOLD = -2.50f;
@@ -2441,7 +2259,6 @@ static volatile uint8_t dndActionStep = 0;
 static volatile uint32_t dndNextStepMs = 0;
 static volatile bool dndActionRequireSwitches = true;
 static uint32_t dndLastTriggerMs = 0;
-static uint32_t dndVolumeNextAutoMs = 0;
 
 // CAN B read budget per loop pass -- bounded so it can never starve CAN A.
 constexpr uint8_t CANB_RX_SCAN_LIMIT = 4;
@@ -2469,7 +2286,6 @@ static void serviceScrollGearShift(const RuntimeConfig& cfg);
 static void handleDndHandsOnFrame(const can_frame& frame);
 static void serviceNagKillerDndBurst(const RuntimeConfig& cfg);
 static void serviceDndScrollAction(const RuntimeConfig& cfg);
-static void serviceDndVolumeAuto(const RuntimeConfig& cfg);
 static void handleVcleftSwitchFrame(const can_frame& frame, const RuntimeConfig& cfg, bool cacheHazardFrame);
 
 static void setupCanB() {
@@ -2923,17 +2739,6 @@ static bool dndScrollCacheFresh() {
          (millis() - canbLastVcleftMux1Ms) <= DND_SCROLL_CACHE_MAX_AGE_MS;
 }
 
-static uint32_t dndVolumeAutoDelayMs() {
-  constexpr uint32_t range = DND_VOLUME_AUTO_MAX_MS - DND_VOLUME_AUTO_MIN_MS + 1UL;
-  return DND_VOLUME_AUTO_MIN_MS + (esp_random() % range);
-}
-
-static bool dndFsdActive() {
-  uint8_t apState = 15;
-  if (!speedLimitMonitor.getAutopilotState(apState)) return false;
-  return apState > DAS_AP_STATE_AVAILABLE && apState <= 6;
-}
-
 static bool dndActionAllowed(const RuntimeConfig& cfg, bool requireSwitches) {
   if (requireSwitches && !cfg.dndEnabled) {
     g_status.dndBlocked = DND_BLOCK_DISABLED;
@@ -3008,14 +2813,22 @@ static void handleDndHandsOnFrame(const can_frame& frame) {
 static void serviceNagKillerDndBurst(const RuntimeConfig& cfg) {
   if (!cfg.nagKillerDndEnabled) {
     nagKillerDndRemainingActions = 0;
+    nagKillerDndHandsRangeActive = false;
     g_status.nagKillerDndRemaining = 0;
     return;
   }
+  const uint32_t now = millis();
+  if (nagKillerDndHandsRangeActive &&
+      nagKillerDndRemainingActions == 0 &&
+      !dndActionActive &&
+      (nagKillerDndNextActionMs == 0 || (int32_t)(now - nagKillerDndNextActionMs) >= 0)) {
+    triggerNagKillerDndBurst(now);
+  }
+
   g_status.nagKillerDndRemaining = nagKillerDndRemainingActions;
   if (nagKillerDndRemainingActions == 0) return;
   if (dndActionActive) return;
 
-  const uint32_t now = millis();
   if (nagKillerDndNextActionMs != 0 && (int32_t)(now - nagKillerDndNextActionMs) < 0) return;
 
   if (startDndVolumeAction(cfg, false)) {
@@ -3076,34 +2889,6 @@ static void serviceDndScrollAction(const RuntimeConfig& cfg) {
     dndNextStepMs = now + DND_SCROLL_STEP_MS;
     g_status.dndActionActive = 1;
     g_status.dndActionType = DND_ACTION_VOLUME;
-  }
-}
-
-static void serviceDndVolumeAuto(const RuntimeConfig& cfg) {
-  const uint32_t now = millis();
-  if (nagKillerDndRemainingActions > 0) {
-    dndVolumeNextAutoMs = 0;
-    return;
-  }
-  if (!cfg.dndEnabled || !dndFsdActive()) {
-    dndVolumeNextAutoMs = 0;
-    return;
-  }
-
-  if (dndVolumeNextAutoMs == 0) {
-    dndVolumeNextAutoMs = now + dndVolumeAutoDelayMs();
-    return;
-  }
-  if ((int32_t)(now - dndVolumeNextAutoMs) < 0) return;
-  if (dndActionActive) {
-    dndVolumeNextAutoMs = now + dndVolumeAutoDelayMs();
-    return;
-  }
-
-  if (startDndVolumeAction(cfg)) {
-    dndVolumeNextAutoMs = now + dndVolumeAutoDelayMs();
-  } else {
-    dndVolumeNextAutoMs = now + DND_SCROLL_STEP_MS;
   }
 }
 
@@ -3712,15 +3497,8 @@ static void handleVcleftSwitchFrame(const can_frame& frame, const RuntimeConfig&
 static void handleCanBFrame(const can_frame& frame, const RuntimeConfig& cfg) {
   // Stage 1: statistics only. No heavy work, no Serial, no JSON, no bridging.
   canbLastId = frame.can_id;
-  can_frame telemetryFrame = frame;
-  if (applyDisableTelemetryFrame(telemetryFrame, 2, cfg)) {
-    sendDisableTelemetryFrame(telemetryFrame, 2);
-  }
 
   handleNagKillerContextFrame(frame, cfg);
-  if (frame.can_id == CAN_ID_NAG_MODE_B_TARGET || frame.can_id == CAN_ID_NAG_MODE_C_TARGET) {
-    handleNagKillerTargetFrame(frame, cfg);
-  }
 
   if (frame.can_id == CANB_ID_STW_ACTN_RQ && frame.can_dlc >= 2) {
     canbLastStwActnRqFrame = frame;
@@ -4149,8 +3927,6 @@ static void handleStatus() {
   if (!s.dasLcHandsOnReasonSeen) {
     s.dasLcHandsOnReasonDecode = DAS_LC_REASON_DECODE_NO_FRAME;
   }
-  s.disableTelemetryLastTxAgeMs =
-      disableTelemetryLastTxMs == 0 ? 0 : (now - disableTelemetryLastTxMs);
   s.fsdActivationResendActive =
       (c.fsdEnabled && c.fsdActivationResendEnabled && c.fsdActivationResendMs > 0) ? 1 : 0;
   s.fsdActivationResendCachedMuxMask = fsdActivationResendCachedMuxMask();
@@ -4166,10 +3942,7 @@ static void handleStatus() {
   j += ",\"fsdActivationResendEnabled\":"; j += c.fsdActivationResendEnabled ? 1 : 0;
   j += ",\"fsdActivationResendMs\":"; j += c.fsdActivationResendMs;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
-  j += ",\"hiddenControlsUnlocked\":"; j += c.hiddenControlsUnlocked ? 1 : 0;
   j += ",\"cabinCameraDisableEnabled\":"; j += c.cabinCameraDisableEnabled ? 1 : 0;
-  j += ",\"disableTelemetryV1Enabled\":"; j += c.disableTelemetryV1Enabled ? 1 : 0;
-  j += ",\"disableTelemetryV2Enabled\":"; j += c.disableTelemetryV2Enabled ? 1 : 0;
   j += ",\"slewPctPerSec\":";        j += c.slewPctPerSec;
   j += ",\"lowSpeedMaxPctRaw\":";    j += c.lowSpeedMaxPctRaw;
   j += ",\"targetBelow60\":";        j += c.targetBelow60;
@@ -4282,11 +4055,6 @@ static void handleStatus() {
   j += ",\"fsdActivationResendPeriodMs\":"; j += s.fsdActivationResendPeriodMs;
   j += ",\"fsdActivationResendTxCount\":"; j += s.fsdActivationResendTxCount;
   j += ",\"fsdActivationResendLastTxAgeMs\":"; j += s.fsdActivationResendLastTxAgeMs;
-  j += ",\"disableTelemetryTxCount\":"; j += s.disableTelemetryTxCount;
-  j += ",\"disableTelemetryTxFail\":"; j += s.disableTelemetryTxFail;
-  j += ",\"disableTelemetryLastId\":"; j += s.disableTelemetryLastId;
-  j += ",\"disableTelemetryLastBus\":"; j += s.disableTelemetryLastBus;
-  j += ",\"disableTelemetryLastTxAgeMs\":"; j += s.disableTelemetryLastTxAgeMs;
   j += ",\"webTaskMaxUs\":";         j += s.webTaskMaxUs;
   j += ",\"totalHeapBytes\":";       j += s.totalHeapBytes;
   j += ",\"freeHeapBytes\":";        j += s.freeHeapBytes;
@@ -4440,18 +4208,7 @@ static void handleConfig() {
   c.fsdActivationResendMs =
       clampFsdActivationResendMs(argU16("fsdActivationResendMs", c.fsdActivationResendMs));
   c.autoSpeedOffsetEnabled  = argBool("autoSpeedOffsetEnabled", c.autoSpeedOffsetEnabled);
-  const bool wantHiddenControlsUnlocked =
-      argBool("hiddenControlsUnlocked", c.hiddenControlsUnlocked);
-  if (!wantHiddenControlsUnlocked) {
-    c.hiddenControlsUnlocked = false;
-  } else if (!c.hiddenControlsUnlocked) {
-    c.hiddenControlsUnlocked =
-        server.hasArg("hiddenControlsPassword") &&
-        server.arg("hiddenControlsPassword") == HIDDEN_CONTROLS_PASSWORD;
-  }
   c.cabinCameraDisableEnabled = argBool("cabinCameraDisableEnabled", c.cabinCameraDisableEnabled);
-  c.disableTelemetryV1Enabled = argBool("disableTelemetryV1Enabled", c.disableTelemetryV1Enabled);
-  c.disableTelemetryV2Enabled = argBool("disableTelemetryV2Enabled", c.disableTelemetryV2Enabled);
   c.slewPctPerSec           = static_cast<uint8_t>(argU16("slewPctPerSec", c.slewPctPerSec));
   c.lowSpeedMaxPctRaw       = static_cast<uint8_t>(argU16("lowSpeedMaxPctRaw", c.lowSpeedMaxPctRaw));
   c.targetBelow60           = argU16("targetBelow60", c.targetBelow60);
@@ -4475,7 +4232,7 @@ static void handleConfig() {
   c.batteryPreheatEnabled   = argBool("batteryPreheatEnabled", c.batteryPreheatEnabled);
   c.dndEnabled              = argBool("dndEnabled", c.dndEnabled);
   c.nagKillerEnabled        = argBool("nagKillerEnabled", c.nagKillerEnabled);
-  c.nagKillerDndEnabled     = argBool("nagKillerDndEnabled", c.nagKillerDndEnabled);
+  c.nagKillerDndEnabled     = c.cabinCameraDisableEnabled;
   c.nagKillerTest052Enabled = argBool("nagKillerTest052Enabled", c.nagKillerTest052Enabled);
   c.nagKillerTest370Enabled = argBool("nagKillerTest370Enabled", c.nagKillerTest370Enabled);
   c.nagKillerMode           = normalizeNagKillerMode(static_cast<uint8_t>(argU16("nagKillerMode", c.nagKillerMode)));
@@ -4700,7 +4457,6 @@ static void loadConfigFromPrefs() {
   c.fsdActivationResendEnabled = prefs.getBool("fsdReOn", c.fsdActivationResendEnabled);
   c.fsdActivationResendMs  = clampFsdActivationResendMs(prefs.getUShort("fsdReMs", c.fsdActivationResendMs));
   c.autoSpeedOffsetEnabled = prefs.getBool("autoOffset", c.autoSpeedOffsetEnabled);
-  c.hiddenControlsUnlocked = prefs.getBool("hidUnlock", c.hiddenControlsUnlocked);
   c.cabinCameraDisableEnabled = prefs.getBool("cabCamOff", c.cabinCameraDisableEnabled);
   c.slewPctPerSec          = prefs.getUChar("slewPct", c.slewPctPerSec);
   c.lowSpeedMaxPctRaw      = prefs.getUChar("lowRaw", c.lowSpeedMaxPctRaw);
@@ -4721,11 +4477,10 @@ static void loadConfigFromPrefs() {
   c.rearFogBrakeStrobeEnabled = prefs.getBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   c.reverseStrobeEnabled   = prefs.getBool("revStrobe", c.reverseStrobeEnabled);
   c.batteryPreheatEnabled  = prefs.getBool("batHeat", c.batteryPreheatEnabled);
-  c.disableTelemetryV1Enabled = prefs.getBool("dtelV1", c.disableTelemetryV1Enabled);
-  c.disableTelemetryV2Enabled = prefs.getBool("dtelV2", c.disableTelemetryV2Enabled);
   c.dndEnabled             = prefs.getBool("dndCont", c.dndEnabled);
   c.nagKillerEnabled       = prefs.getBool("nagEn", c.nagKillerEnabled);
   c.nagKillerDndEnabled    = prefs.getBool("nagDnd", c.nagKillerDndEnabled);
+  c.cabinCameraDisableEnabled = c.cabinCameraDisableEnabled || c.nagKillerDndEnabled;
   c.nagKillerTest052Enabled = prefs.getBool("nagT052", c.nagKillerTest052Enabled);
   c.nagKillerTest370Enabled = prefs.getBool("nagT370", c.nagKillerTest370Enabled);
   c.nagKillerMode          = normalizeNagKillerMode(prefs.getUChar("nagMode", c.nagKillerMode));
@@ -4754,7 +4509,6 @@ static void saveConfigToPrefs() {
   prefs.putBool("fsdReOn", c.fsdActivationResendEnabled);
   prefs.putUShort("fsdReMs", clampFsdActivationResendMs(c.fsdActivationResendMs));
   prefs.putBool("autoOffset", c.autoSpeedOffsetEnabled);
-  prefs.putBool("hidUnlock", c.hiddenControlsUnlocked);
   prefs.putBool("cabCamOff", c.cabinCameraDisableEnabled);
   prefs.putUChar("slewPct", c.slewPctPerSec);
   prefs.putUChar("lowRaw", c.lowSpeedMaxPctRaw);
@@ -4774,8 +4528,6 @@ static void saveConfigToPrefs() {
   prefs.putBool("fogBrake", c.rearFogBrakeStrobeEnabled);
   prefs.putBool("revStrobe", c.reverseStrobeEnabled);
   prefs.putBool("batHeat", c.batteryPreheatEnabled);
-  prefs.putBool("dtelV1", c.disableTelemetryV1Enabled);
-  prefs.putBool("dtelV2", c.disableTelemetryV2Enabled);
   prefs.putBool("dndCont", c.dndEnabled);
   prefs.putBool("nagEn", c.nagKillerEnabled);
   prefs.putBool("nagDnd", c.nagKillerDndEnabled);
@@ -4987,22 +4739,12 @@ static void updateRuntimeDiagnostics(uint32_t loopElapsedUs) {
 
 static void handleTwaiFrame(can_frame& frame, const RuntimeConfig& cfg) {
   recordCanFrame(frame, 'R', 1);
-  if (applyDisableTelemetryFrame(frame, 1, cfg)) {
-    // 0x3FD mux1 is already re-transmitted by the normal AP-control handler
-    // below; avoid emitting a duplicate telemetry echo for that frame.
-    if (!(frame.can_id == CAN_ID_AP_CONTROL && readMuxID(frame) == 1)) {
-      sendDisableTelemetryFrame(frame, 1);
-    }
-  }
   handleBatteryTempDiagFrame(frame, 1);
   handleBatteryPreheatBmsDiagFrame(frame, 1);
   handleBatteryPreheatFeedbackFrame(frame, 1);
   speedLimitMonitor.update(frame);
   handleNagKillerContextFrame(frame, cfg);
   handleDasCarLogFrame(frame);
-#ifndef ENABLE_CANB_MCP2515
-  handleNagKillerTargetFrame(frame, cfg);
-#endif
 #ifdef ENABLE_CANB_MCP2515
   handleDndHandsOnFrame(frame);
 #endif
@@ -5014,7 +4756,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  Serial.println("[BOOT] T2CAN Disable Telemetry starting");
+  Serial.println("[BOOT] T2CAN FSD starting");
   Serial.printf("[BOOT] CPU=%uMHz flash=%u psram=%u\n",
                 static_cast<unsigned>(getCpuFrequencyMhz()),
                 static_cast<unsigned>(ESP.getFlashChipSize()),
@@ -5113,7 +4855,6 @@ void loop() {
   serviceRearFogBrakeStrobe(cfg);
   serviceScrollGearShift(cfg);
   serviceNagKillerDndBurst(cfg);
-  serviceDndVolumeAuto(cfg);
   serviceDndScrollAction(cfg);
 #endif
 
