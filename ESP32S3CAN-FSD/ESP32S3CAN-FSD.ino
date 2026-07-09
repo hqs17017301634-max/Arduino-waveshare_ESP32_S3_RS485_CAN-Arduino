@@ -182,6 +182,7 @@ constexpr uint16_t FSD_ACTIVATION_RESEND_MAX_PERIOD_MS = 1000;
 // equivalent, so behaviour with no WebUI is unchanged.
 struct RuntimeConfig {
   bool fsdEnabled = true;
+  bool canCommsEnabled = true;       // master TX gate; keeps non-FSD CAN features independent from FSD activation
   bool fsdActivationResendEnabled = false;
   uint16_t fsdActivationResendMs = FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS;
   bool autoSpeedOffsetEnabled = true;
@@ -704,6 +705,7 @@ static bool canbScheduleTx(const can_frame& frame, uint8_t source, uint8_t prior
 #endif
 
 static bool twai_send(const can_frame& frame) {
+  if (!g_config.canCommsEnabled) return false;
   if (g_config.can1ReceiveOnly) return false;  // bus=1/TWAI/physical CANB RX-only
   if (frame.can_dlc > 8) return false;
   const uint32_t txStartUs = micros();
@@ -940,6 +942,7 @@ constexpr uint16_t BATTERY_PREHEAT_BLOCK_CHARGING = 1U << 4;
 constexpr uint16_t BATTERY_PREHEAT_BLOCK_MAX_TEMP = 1U << 5;
 constexpr uint16_t BATTERY_PREHEAT_BLOCK_AVG_TEMP = 1U << 6;
 constexpr uint16_t BATTERY_PREHEAT_BLOCK_TIMEOUT = 1U << 7;
+constexpr uint16_t BATTERY_PREHEAT_BLOCK_CAN_COMMS_DISABLED = 1U << 8;
 constexpr int TEMPERATURE_SNA_CX100 = -32768;
 static uint8_t batteryPreheatOffFramesLeft = 0;
 
@@ -1122,7 +1125,7 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
   updateBatteryPreheatControlStatus(cfg, now);
 
 #ifdef ENABLE_CANB_MCP2515
-  if (!cfg.canbEnabled || !canbIsReady()) {
+  if (!cfg.canCommsEnabled || !cfg.canbEnabled || !canbIsReady()) {
     g_status.batteryPreheatActive = 0;
     batteryPreheatLastSendMs = 0;
     batteryPreheatOffFramesLeft = 0;
@@ -1133,7 +1136,7 @@ static void serviceBatteryPreheat(const RuntimeConfig& cfg) {
     return;
   }
 #else
-  if (cfg.can1ReceiveOnly) {
+  if (!cfg.canCommsEnabled || cfg.can1ReceiveOnly) {
     g_status.batteryPreheatActive = 0;
     batteryPreheatLastSendMs = 0;
     batteryPreheatOffFramesLeft = 0;
@@ -1836,7 +1839,7 @@ static uint8_t fsdActivationResendCachedMuxMask() {
 }
 
 static void cacheFsdActivationResendFrame(const can_frame& frame, uint8_t mux, const RuntimeConfig& cfg) {
-  if (!cfg.fsdEnabled || !cfg.fsdActivationResendEnabled) return;
+  if (!cfg.canCommsEnabled || !cfg.fsdEnabled || !cfg.fsdActivationResendEnabled) return;
   if (frame.can_id != CAN_ID_AP_CONTROL || frame.can_dlc < 8 || mux != 0) return;
   fsdActivationResendFrames[mux] = frame;
   fsdActivationResendHasFrame[mux] = true;
@@ -1844,7 +1847,8 @@ static void cacheFsdActivationResendFrame(const can_frame& frame, uint8_t mux, c
 
 static void serviceFsdActivationResend(const RuntimeConfig& cfg) {
   const uint32_t now = millis();
-  const bool enabled = cfg.fsdEnabled &&
+  const bool enabled = cfg.canCommsEnabled &&
+                       cfg.fsdEnabled &&
                        cfg.fsdActivationResendEnabled &&
                        cfg.fsdActivationResendMs > 0;
   const uint16_t periodMs = clampFsdActivationResendMs(cfg.fsdActivationResendMs);
@@ -1995,20 +1999,20 @@ struct HW3Handler {
     if (frame.can_id == CAN_ID_AP_CONTROL) {
       if (frame.can_dlc < 8) return;
       auto index = readMuxID(frame);
-      if (index == 0 && cfg.fsdEnabled) {
+      if (index == 0 && cfg.canCommsEnabled && cfg.fsdEnabled) {
         setBit(frame, 46, true);
         // 0x3FD mux 0 enables the FSD/AP bit and writes the current drive style.
         setSpeedProfileV12V13(frame, speedProfile);
         if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
-      if (index == 1) {
+      if (index == 1 && cfg.canCommsEnabled) {
         setBit(frame, 19, false);
         const int8_t cabinCameraOverride = cabinCameraBit43Override(cfg, millis());
         if (cabinCameraOverride >= 0) setBit(frame, 43, cabinCameraOverride != 0);
         // 0x3FD mux 1 keeps bit 19 clear and can optionally clear the cabin camera bit.
         if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
-      if (index == 2 && cfg.fsdEnabled) {
+      if (index == 2 && cfg.canCommsEnabled && cfg.autoSpeedOffsetEnabled) {
         uint8_t speedOffsetRaw = unifiedSpeedCompensation.hasFusedSpeedLimit
           ? unifiedSpeedCompensation.speedOffsetRaw
           : readSpeedOffsetRaw(frame);
@@ -2065,6 +2069,7 @@ static bool canbIsReady() {
 static uint16_t batteryPreheatComputeBlockMask(const RuntimeConfig& cfg, uint32_t now) {
   uint16_t mask = 0;
   if (!cfg.batteryPreheatEnabled) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
+  if (!cfg.canCommsEnabled) mask |= BATTERY_PREHEAT_BLOCK_CAN_COMMS_DISABLED;
   if (!cfg.canbEnabled) mask |= BATTERY_PREHEAT_BLOCK_CANB_DISABLED;
   if (!canbReady) mask |= BATTERY_PREHEAT_BLOCK_CANB_NOT_READY;
   if (batteryPreheatSocTooLow(now)) mask |= BATTERY_PREHEAT_BLOCK_LOW_SOC;
@@ -2400,6 +2405,7 @@ static bool canb_recv(can_frame& frame) {
 
 static bool canb_send(const can_frame& frame, uint8_t source) {
   if (source >= CANB_TX_SRC_COUNT) source = CANB_TX_SRC_OTHER;
+  if (!g_config.canCommsEnabled) return false;
   if (diagCanbTxThisLoop < UINT8_MAX) diagCanbTxThisLoop++;
   if (diagCanbTxThisLoop > diagCanbTxLoopMax) diagCanbTxLoopMax = diagCanbTxThisLoop;
   if (diagCanbTxThisLoop > diagCanbTxLoopMaxEver) diagCanbTxLoopMaxEver = diagCanbTxThisLoop;
@@ -2445,6 +2451,7 @@ static void canbTxQueueRemove(uint8_t index) {
 
 static bool canbScheduleTx(const can_frame& frame, uint8_t source, uint8_t priority,
                            uint16_t ttlMs, bool replaceSameSourceId) {
+  if (!g_config.canCommsEnabled) return false;
   if (!canbReady || frame.can_dlc > 8) return canb_send(frame, source);
   if (source >= CANB_TX_SRC_COUNT) source = CANB_TX_SRC_OTHER;
   if (priority > CANB_TX_PRIO_LOW) priority = CANB_TX_PRIO_LOW;
@@ -2740,6 +2747,10 @@ static bool dndScrollCacheFresh() {
 }
 
 static bool dndActionAllowed(const RuntimeConfig& cfg, bool requireSwitches) {
+  if (!cfg.canCommsEnabled) {
+    g_status.dndBlocked = DND_BLOCK_DISABLED;
+    return false;
+  }
   if (requireSwitches && !cfg.dndEnabled) {
     g_status.dndBlocked = DND_BLOCK_DISABLED;
     return false;
@@ -3664,6 +3675,7 @@ static void serviceCanBScheduledTx() {
 static uint16_t batteryPreheatComputeBlockMask(const RuntimeConfig& cfg, uint32_t now) {
   uint16_t mask = 0;
   if (!cfg.batteryPreheatEnabled) mask |= BATTERY_PREHEAT_BLOCK_DISABLED;
+  if (!cfg.canCommsEnabled) mask |= BATTERY_PREHEAT_BLOCK_CAN_COMMS_DISABLED;
   if (cfg.can1ReceiveOnly) mask |= BATTERY_PREHEAT_BLOCK_CANB_DISABLED;
   if (batteryPreheatSocTooLow(now)) mask |= BATTERY_PREHEAT_BLOCK_LOW_SOC;
   if (batteryPreheatChargeDetected) mask |= BATTERY_PREHEAT_BLOCK_CHARGING;
@@ -3938,7 +3950,8 @@ static void handleStatus() {
   String j;
   j.reserve(11800);
   j += '{';
-  j += "\"fsdEnabled\":";            j += c.fsdEnabled ? 1 : 0;
+  j += "\"canCommsEnabled\":";       j += c.canCommsEnabled ? 1 : 0;
+  j += ",\"fsdEnabled\":";           j += c.fsdEnabled ? 1 : 0;
   j += ",\"fsdActivationResendEnabled\":"; j += c.fsdActivationResendEnabled ? 1 : 0;
   j += ",\"fsdActivationResendMs\":"; j += c.fsdActivationResendMs;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
@@ -4202,6 +4215,7 @@ static void handleConfig() {
   RuntimeConfig c = configSnapshot();
   const uint8_t oldCanBFilterMode = c.canbFilterMode;
 
+  c.canCommsEnabled        = argBool("canCommsEnabled", c.canCommsEnabled);
   c.fsdEnabled              = argBool("fsdEnabled", c.fsdEnabled);
   c.fsdActivationResendEnabled =
       argBool("fsdActivationResendEnabled", c.fsdActivationResendEnabled);
@@ -4453,6 +4467,7 @@ static void handleRecDownload() {
 static void loadConfigFromPrefs() {
   prefs.begin("t2can", true);
   RuntimeConfig c;  // defaults
+  c.canCommsEnabled       = prefs.getBool("canComms", c.canCommsEnabled);
   c.fsdEnabled             = prefs.getBool("fsdEnabled", c.fsdEnabled);
   c.fsdActivationResendEnabled = prefs.getBool("fsdReOn", c.fsdActivationResendEnabled);
   c.fsdActivationResendMs  = clampFsdActivationResendMs(prefs.getUShort("fsdReMs", c.fsdActivationResendMs));
@@ -4505,6 +4520,7 @@ static void loadConfigFromPrefs() {
 static void saveConfigToPrefs() {
   RuntimeConfig c = configSnapshot();
   prefs.begin("t2can", false);
+  prefs.putBool("canComms", c.canCommsEnabled);
   prefs.putBool("fsdEnabled", c.fsdEnabled);
   prefs.putBool("fsdReOn", c.fsdActivationResendEnabled);
   prefs.putUShort("fsdReMs", clampFsdActivationResendMs(c.fsdActivationResendMs));

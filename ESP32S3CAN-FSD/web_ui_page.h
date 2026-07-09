@@ -33,7 +33,6 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <h1>T-2CAN FSD 运行参数</h1>
 
 <div class="card bar">
-<button class="alt" onclick="saveConfig()">保存</button>
 <button class="warn" onclick="rebootBoard()">重启</button>
 <button class="ghost" id="themeBtn" onclick="toggleTheme()">日间</button>
 <label class="pageSwitch">诊断信息页<input type="checkbox" id="diagPageSwitch" onchange="setDiagPage(this.checked)"></label>
@@ -48,14 +47,25 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>bus=2</span><span>MCP2515 / physical CANA / SPI + INT8</span></div>
 </div>
 
-<div class="card">
-<h2>FSD / 速度</h2>
+<div class="card wide">
+<h2>功能开关</h2>
+<label>开启CAN通讯<input type="checkbox" id="canCommsEnabled"></label>
 <label>FSD 启用<input type="checkbox" id="fsdEnabled"></label>
 <label>FSD 激活帧补发<input type="checkbox" id="fsdActivationResendEnabled"></label>
+<label>自动速度偏移<input type="checkbox" id="autoSpeedOffsetEnabled"></label>
+<label>免打扰<input type="checkbox" id="cabinCameraDisableEnabled"></label>
+<label>高光爆闪启用<input type="checkbox" id="highBeamStrobeEnabled"></label>
+<label>后雾灯刹车爆闪启用<input type="checkbox" id="rearFogBrakeStrobeEnabled"></label>
+<label>倒挡双闪雾灯启用<input type="checkbox" id="reverseStrobeEnabled"></label>
+<label>电池预热启用<input type="checkbox" id="batteryPreheatEnabled"></label>
+<label>维修模式 0x339<input type="checkbox" id="canbServiceModeEnabled"></label>
+</div>
+
+<div class="card">
+<h2>FSD / 速度参数</h2>
 <label>补发周期 ms<input type="number" id="fsdActivationResendMs" min="1" max="1000" step="1"></label>
 <div class="kv"><span>补发状态 / 周期</span><span><b id="fsdActivationResendActive">-</b> / <b id="fsdActivationResendPeriodMs">-</b></span></div>
 <div class="kv"><span>补发次数 / mux0缓存</span><span><b id="fsdActivationResendTxCount">-</b> / <b id="fsdActivationResendCachedMuxMask">-</b></span></div>
-<label>自动速度偏移<input type="checkbox" id="autoSpeedOffsetEnabled"></label>
 <label>缓降百分比/秒<input type="number" id="slewPctPerSec" min="0" max="100"></label>
 <label>低速最大偏移 %<input type="number" id="lowSpeedMaxPctRaw" min="0" max="50" step="0.25"></label>
 <label>目标速度 &lt;60<input type="number" id="targetBelow60" min="0" max="255"></label>
@@ -67,25 +77,11 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <label>目标速度 120..139<input type="number" id="target120" min="0" max="255"></label>
 </div>
 
-<div class="card">
-<h2>免打扰</h2>
-<label>免打扰<input type="checkbox" id="cabinCameraDisableEnabled"></label>
-</div>
-
-<div class="card">
-<h2>灯光 / 车身</h2>
-<label>高光爆闪启用<input type="checkbox" id="highBeamStrobeEnabled"></label>
-<label>后雾灯刹车爆闪启用<input type="checkbox" id="rearFogBrakeStrobeEnabled"></label>
-<label>倒挡双闪雾灯启用<input type="checkbox" id="reverseStrobeEnabled"></label>
-</div>
-
-<div class="card">
-<h2>预热 / MCP2515</h2>
-<label>电池预热启用<input type="checkbox" id="batteryPreheatEnabled"></label>
+<div class="card wide">
+<h2>CAN 总线控制</h2>
 <label>bus=1/TWAI/物理CANB 只收不发<input type="checkbox" id="can1ReceiveOnly"></label>
 <h3>MCP2515 / 物理 CANA</h3>
 <label>启用<input type="checkbox" id="canbEnabled"></label>
-<label>维修模式 0x339<input type="checkbox" id="canbServiceModeEnabled"></label>
 <label>硬件过滤模式<select id="canbFilterMode"><option value="0">抓包调试</option><option value="1">当前功能相关ID</option></select></label>
 </div>
 
@@ -209,14 +205,14 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 </div>
 
 <script>
-let pollTimer=null,recTimer=null,loaded=false,lastDiag=null;
+let pollTimer=null,recTimer=null,loaded=false,lastDiag=null,autoSaveTimer=null,autoSaveBusy=false,autoSaveQueued=false;
 function getStoredTheme(){try{return localStorage.getItem("theme")||""}catch(e){return ""}}
 function setStoredTheme(t){try{localStorage.setItem("theme",t)}catch(e){}}
 function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")return t;const h=(new Date()).getHours();return h>=7&&h<19?"light":"dark"}
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
-const cfgIds=["fsdEnabled","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","can1ReceiveOnly"];
+const cfgIds=["canCommsEnabled","fsdEnabled","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
@@ -279,7 +275,7 @@ function dasLcHandsReason(v){const m={
 52:"52 手未准备好 / DRIVER_HANDS_NOT_READY",
 53:"53 注意力监测不可用 / ATTN_MONITORING_UNAVAILABLE"};
 if(v===255)return "未解码 / Not decoded";return m[v]||((v>>>0)+" 未知 / Unknown")}
-function preheatBlock(v){const a=[];if(v&1)a.push("开关关闭");if(v&2)a.push("CANB关闭");if(v&4)a.push("MCP2515未就绪");if(v&8)a.push("SOC低于5%");if(v&16)a.push("检测到充电");if(v&32)a.push("最高温>=45°C");if(v&64)a.push("平均温>=42°C稳定10秒");if(v&128)a.push("运行超过15分钟");return a.length?a.join("；"):"无阻止"}
+function preheatBlock(v){const a=[];if(v&1)a.push("开关关闭");if(v&2)a.push("CANB关闭");if(v&4)a.push("MCP2515未就绪");if(v&8)a.push("SOC低于5%");if(v&16)a.push("检测到充电");if(v&32)a.push("最高温>=45°C");if(v&64)a.push("平均温>=42°C稳定10秒");if(v&128)a.push("运行超过15分钟");if(v&256)a.push("CAN通讯关闭");return a.length?a.join("；"):"无阻止"}
 function cx100(v){return v<=-32000?"-":(v/100).toFixed(2)+" ℃"}
 function durMs(v){v=Number(v)||0;if(v<1000)return v+" ms";if(v<60000)return (v/1000).toFixed(1)+" 秒";return (v/60000).toFixed(1)+" 分钟"}
 function ageMs(v){v=Number(v)||0;return v===0?"刚刚":durMs(v)+"前"}
@@ -393,7 +389,9 @@ function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementBy
 function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);if(e)p.set(k,getVal(e))});return p}
-function saveConfig(){fetch("/config",{method:"POST",body:body()}).then(()=>fetch("/save",{method:"POST"})).then(async r=>{showResult(await r.text());pollStatus()})}
+function scheduleAutoSave(){if(!loaded)return;clearTimeout(autoSaveTimer);showResult("正在自动保存...");autoSaveTimer=setTimeout(saveConfig,700)}
+function bindAutoSave(){cfgIds.forEach(k=>{const e=document.getElementById(k);if(!e)return;const ev=(e.type==="checkbox"||e.tagName==="SELECT")?"change":"input";e.addEventListener(ev,scheduleAutoSave);if(ev==="input")e.addEventListener("change",scheduleAutoSave)})}
+function saveConfig(){if(autoSaveBusy){autoSaveQueued=true;return}autoSaveBusy=true;fetch("/config",{method:"POST",body:body()}).then(r=>{if(!r.ok)throw new Error("config");return fetch("/save",{method:"POST"})}).then(r=>{if(!r.ok)throw new Error("save");showResult("已自动保存");pollStatus()}).catch(()=>showResult("自动保存失败")).finally(()=>{autoSaveBusy=false;if(autoSaveQueued){autoSaveQueued=false;scheduleAutoSave()}})}
 function rebootBoard(){setPolling(false);const p=document.getElementById("poll");if(p)p.checked=false;showResult("正在重启...");fetch("/reboot",{method:"POST"}).catch(()=>{})}
 function recQuery(){const ids=document.getElementById("recIds").value.trim();return ids?("?ids="+encodeURIComponent(ids)):""}
 function stopReason(v){return v===1?"满":(v===2?"超时":"手动/无")}
@@ -402,6 +400,6 @@ function setRecUi(j){const active=j&&j.active;document.getElementById("recState"
 function pollRec(){fetch("/rec_status").then(r=>r.json()).then(setRecUi).catch(()=>{})}
 function startRec(){fetch("/rec_start"+recQuery(),{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(!recTimer)recTimer=setInterval(pollRec,800)})}
 function stopRec(){fetch("/rec_stop",{method:"POST"}).then(async r=>{showResult(await r.text());pollRec();if(recTimer){clearInterval(recTimer);recTimer=null}})}
-pollStatus();
+bindAutoSave();pollStatus();
 </script>
 </body></html>)HTML";
