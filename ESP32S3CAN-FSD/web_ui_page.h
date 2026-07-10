@@ -27,10 +27,23 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 .kv{display:flex;justify-content:space-between;align-items:flex-start;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line2);gap:14px}.kv span{min-width:0}.kv span:first-child{color:var(--muted)}.kv span:last-child{color:var(--ok);font-variant-numeric:tabular-nums;text-align:right;word-break:break-word;overflow-wrap:anywhere;max-width:62%}.kv b{font-weight:700}
 .result{display:none;font-size:12px;color:var(--warn);margin:8px 0 0;flex-basis:100%}.result:not(:empty){display:block;min-height:18px}.bar{position:sticky;top:0;z-index:5;background:var(--bar);backdrop-filter:blur(6px);display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:8px;margin-bottom:12px}
 .pageSwitch{display:inline-flex;justify-content:flex-start;align-items:center;gap:8px;margin:4px 0 0 auto;font-size:13px;color:var(--muted);min-height:36px}.pollSwitch{display:inline-flex;gap:8px;align-items:center;min-height:0;margin:0 0 0 10px;color:var(--muted);font-size:13px;font-weight:400}.pollSwitch input{width:40px;height:24px;min-width:40px}.pollSwitch input:before{width:18px;height:18px}.pollSwitch input:checked:before{left:18px}.hidden{display:none!important}
+.legalBackdrop{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.74);display:flex;align-items:center;justify-content:center;padding:14px}.legalModal{width:min(760px,100%);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:0 14px 45px rgba(0,0,0,.45)}.legalModal h2{font-size:18px;margin:0 0 10px}.legalModal p{margin:10px 0}.legalStrong{font-size:2em;line-height:1.28;color:#ff3b3b;font-weight:850}.legalActions{display:flex;justify-content:flex-end;margin-top:14px}.legalActions button{min-width:180px}
 @media(min-width:900px){body{padding:16px 18px}.page{display:block;columns:2 430px;column-gap:12px}.page>.card{break-inside:avoid;margin:0 0 12px}.page>.wide{column-span:all}}
 @media(max-width:520px){body{padding:10px}h1{font-size:18px}.card{padding:11px;border-radius:9px}button,.linkbtn{width:100%;margin:4px 0 0}.pageSwitch{width:100%;margin-left:0}.kv{gap:8px;flex-wrap:wrap}.kv span:first-child{flex:1 1 34%}.kv span:last-child{flex:1 1 58%;max-width:100%}label{align-items:center;flex-wrap:wrap;overflow-wrap:anywhere}label select{flex-basis:100%;min-width:0}label input[type=number]{margin-left:auto}}
 </style></head><body>
 <h1>T-2CAN FSD 运行参数</h1>
+
+<div id="legalNotice" class="legalBackdrop">
+<div class="legalModal" role="dialog" aria-modal="true" aria-labelledby="legalTitle">
+<h2 id="legalTitle">安全提示与使用声明</h2>
+<p>本固件仅供开源学习、研究与测试使用。使用前请确认你已充分理解 CAN 通讯、FSD/AP 相关信号测试和免打扰等功能的作用、适用场景及潜在后果，并自行承担全部责任。</p>
+<p class="legalStrong">禁止任何形式的售卖、转售或商业化分发。</p>
+<p>相关功能可能带来法律、合规及行车安全风险。请严格遵守当地法律法规，并仅在确认安全的环境中使用。</p>
+<p class="legalStrong">驾驶过程中，请始终保持清醒并专注驾驶，目视前方，双手随时准备接管方向盘。任何辅助驾驶功能都不能替代驾驶员对车辆和道路环境的持续观察与控制。</p>
+<p>点击确认即表示你已阅读并理解以上提示。</p>
+<div class="legalActions"><button onclick="closeLegalNotice()">我已阅读并理解</button></div>
+</div>
+</div>
 
 <div class="card bar">
 <button class="warn" onclick="rebootBoard()">重启</button>
@@ -67,7 +80,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>补发状态 / 周期</span><span><b id="fsdActivationResendActive">-</b> / <b id="fsdActivationResendPeriodMs">-</b></span></div>
 <div class="kv"><span>补发次数 / mux0缓存</span><span><b id="fsdActivationResendTxCount">-</b> / <b id="fsdActivationResendCachedMuxMask">-</b></span></div>
 <label>缓降百分比/秒<input type="number" id="slewPctPerSec" min="0" max="100"></label>
-<label>低速最大偏移 %<input type="number" id="lowSpeedMaxPctRaw" min="0" max="50" step="0.25"></label>
+<label>低速最大偏移 %<input type="number" id="lowSpeedMaxPctRaw" min="0" max="60" step="0.25"></label>
 <label>目标速度 &lt;60<input type="number" id="targetBelow60" min="0" max="255"></label>
 <label>目标速度 60..69<input type="number" id="target60" min="0" max="255"></label>
 <label>目标速度 70..79<input type="number" id="target70" min="0" max="255"></label>
@@ -156,6 +169,20 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <div class="kv"><span>MCP2515 EFLG / RX overflow</span><span><b id="canbErrorFlags">-</b> / <b id="canbRxOverflowCount">-</b></span></div>
 </div>
 
+<div class="card wide">
+<h2>FSD 自动换挡诊断</h2>
+<div class="kv"><span>总状态</span><span id="autoShiftDiagSummary">-</span></div>
+<div class="kv"><span>Smart Shift 网关/UI</span><span><b id="autoShiftGtwSmartShiftStatus">-</b> / <b id="autoShiftGtwPrimaryGearControlStatus">-</b> / <b id="autoShiftGtwGearStripEnable">-</b> / <b id="autoShiftGtwGearAgeMs">-</b></span></div>
+<div class="kv"><span>DI 推荐换挡</span><span><b id="autoShiftDiSmartShiftUnavailableReason">-</b> / <b id="autoShiftDiSmartShiftGear">-</b> / <b id="autoShiftDiFrontBlocked">-</b> / <b id="autoShiftDiRearBlocked">-</b> / <b id="autoShiftDiSuggestedAgeMs">-</b></span></div>
+<div class="kv"><span>DAS 换挡方向</span><span><b id="autoShiftDasUpcomingDirection">-</b> / <b id="autoShiftDasTorqueDirection">-</b> / <b id="autoShiftDasBrakeRequired">-</b> / <b id="autoShiftDasSmartShiftAgeMs">-</b></span></div>
+<div class="kv"><span>P档/物理状态</span><span><b id="autoShiftDiGear">-</b> / <b id="autoShiftDiBrakePedalState">-</b> / <b id="autoShiftDiSystemState">-</b> / <b id="autoShiftDiVehicleSpeedCx10">-</b></span></div>
+<div class="kv"><span>驾驶员/车身</span><span><b id="autoShiftDriverBuckleStatus">-</b> / <b id="autoShiftDriverDoorStatus">-</b> / <b id="autoShiftDriverUnbuckled">-</b> / <b id="autoShiftVcfrontAgeMs">-</b></span></div>
+<div class="kv"><span>FSD UI配置</span><span><b id="autoShiftUiEnableFsd">-</b> / <b id="autoShiftUiHasFsd">-</b> / <b id="autoShiftUiFsdSuspended">-</b> / <b id="autoShiftUiStartFromPark">-</b></span></div>
+<div class="kv"><span>DAS Ready</span><span><b id="autoShiftDasAutopilotState">-</b> / <b id="autoShiftDasLssState">-</b> / <b id="autoShiftDasFleetSpeedState">-</b> / <b id="autoShiftDasHandsOnState">-</b></span></div>
+<div class="kv"><span>DAS状态2</span><span><b id="autoShiftDasPmmSysFaultReason">-</b> / <b id="autoShiftDasCsaState">-</b> / <b id="autoShiftDasRobState">-</b> / <b id="autoShiftDasDriverInteractionLevel">-</b></span></div>
+<div class="kv"><span>摄像头/APP Warning</span><span><b id="autoShiftW330CabinCameraFault">-</b> / <b id="autoShiftW372CabinCameraBlocked">-</b> / <b id="autoShiftW391CabinCameraBlockedOnAp">-</b> / <b id="autoShiftW393AttnMntrUnavailable">-</b></span></div>
+</div>
+
 <div class="card">
 <h2>速度 / FSD</h2>
 <div class="kv"><span>融合限速 kph</span><span id="fusedLimitKph">-</span></div>
@@ -212,10 +239,11 @@ function preferredTheme(){const t=getStoredTheme();if(t==="light"||t==="dark")re
 function applyTheme(t){document.documentElement.setAttribute("data-theme",t);const b=document.getElementById("themeBtn");if(b)b.textContent=t==="light"?"夜间":"日间"}
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
+function closeLegalNotice(){const e=document.getElementById("legalNotice");if(e)e.classList.add("hidden")}
 const cfgIds=["canCommsEnabled","fsdEnabled","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
-function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(50,Number(v||0)/4)).toFixed(2);else e.value=v;}
-function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(200,Math.round((Number(e.value)||0)*4)));return e.value}
+function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(60,Number(v||0)/4)).toFixed(2);else e.value=v;}
+function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(240,Math.round((Number(e.value)||0)*4)));return e.value}
 function showResult(text){const e=document.getElementById("testResult");if(e)e.textContent=text}
 function yesNo(v){return v?"是":"否"}
 function yesNoUnknown(v){return v===255?"-":yesNo(v)}
@@ -282,6 +310,15 @@ function ageMs(v){v=Number(v)||0;return v===0?"刚刚":durMs(v)+"前"}
 function canBus(v){return v===1?"bus=1":(v===2?"bus=2":v)}
 function us(v){return (v>>>0)+" us"}
 function kb(v){return Math.round((v||0)/1024)+" KB"}
+function asAge(v){return Number(v)===4294967295?"未收到":ageMs(v)}
+function asBool(v){v=Number(v);return v===255?"未收到":(v?"是":"否")}
+function asMap(v,m){v=Number(v);return v===255?"未收到":(m[v]||String(v))}
+function asSpeed(v){v=Number(v);return v<=-32000?"未收到":(v/10).toFixed(1)+" kph"}
+function asOk(v,want){v=Number(v);return v!==255&&v===want}
+function asNot(v,want){v=Number(v);return v!==255&&v!==want}
+function autoShiftAp(v){return asMap(v,["0 DISABLED","1 UNAVAILABLE","2 AVAILABLE","3 ACTIVE_NOMINAL","4 ACTIVE_RESTRICTED","5 ACTIVE_NAV","6 ACTIVE_FSD"])}
+function autoShiftGear(v){return asMap(v,["0 INVALID","1 P","2 R","3 N","4 D",,,,, "7 SNA"])}
+function autoShiftDir(v){return asMap(v,["0 NONE","1 REVERSE","2 DRIVE","3 SNA"])}
 function setDiagPage(on){const main=document.getElementById("mainPage"),diag=document.getElementById("diagPage");if(main)main.classList.toggle("hidden",on);if(diag)diag.classList.toggle("hidden",!on);if(on){const p=document.getElementById("poll");if(p&&!p.checked){p.checked=true;setPolling(true)}window.scrollTo(0,0)}}
 function fmtStat(k,v){
 if(k==="diagWindowMs")return v+" ms";
@@ -295,6 +332,29 @@ if(k==="fsdActivationResendActive")return yesNo(v);
 if(k==="fsdActivationResendCachedMuxMask")return (v&1)?"已缓存":"-";
 if(k==="fsdActivationResendPeriodMs")return v+" ms";
 if(k==="fsdActivationResendLastTxAgeMs")return ageMs(v);
+if(k.startsWith("autoShift")&&k.endsWith("AgeMs"))return asAge(v);
+if(["autoShiftUiEnableFsd","autoShiftUiHasFsd","autoShiftUiFsdSuspended","autoShiftUiMux0Valid","autoShiftUiStartFromPark","autoShiftUiStartFromParkBrakeConfirm","autoShiftUiMux2Valid","autoShiftGtwGearStripEnable","autoShiftDiFrontBlocked","autoShiftDiRearBlocked","autoShiftDasBrakeRequired","autoShiftDiAccelPedalPressed","autoShiftW330CabinCameraFault","autoShiftW372CabinCameraBlocked","autoShiftW391CabinCameraBlockedOnAp","autoShiftW393AttnMntrUnavailable"].includes(k))return asBool(v);
+if(k==="autoShiftGtwSmartShiftStatus")return asMap(v,{1:"1 ENABLED"});
+if(k==="autoShiftGtwPrimaryGearControlStatus")return asMap(v,{0:"0 NOT_QUALIFIED",1:"1 QUALIFIED"});
+if(k==="autoShiftDiSmartShiftUnavailableReason")return asMap(v,{0:"0 SNA",1:"1 NONE",2:"2 UI_DISABLE",5:"5 CHARGE_CABLE",6:"6 CLOSURE_OPEN",8:"8 GTW_NOT_QUALIFIED"});
+if(k==="autoShiftDiSmartShiftGear")return asMap(v,{0:"0 NONE",1:"1 DRIVE",2:"2 REVERSE"});
+if(k==="autoShiftDasUpcomingDirection")return autoShiftDir(v);
+if(k==="autoShiftDasTorqueDirection")return asMap(v,{0:"0 SNA",1:"1 NOT_CONFIDENT",2:"2 REVERSE",3:"3 FORWARD",4:"4 NOT_READY"});
+if(k==="autoShiftDiGear")return autoShiftGear(v);
+if(k==="autoShiftDiBrakePedalState")return asMap(v,{0:"0 OFF",1:"1 ON",2:"2 INVALID"});
+if(k==="autoShiftDiSystemState")return asMap(v,{0:"0 UNAVAILABLE",1:"1 IDLE",2:"2 STANDBY",3:"3 FAULT",4:"4 ABORT",5:"5 ENABLE"});
+if(k==="autoShiftDiVehicleSpeedCx10")return asSpeed(v);
+if(k==="autoShiftDriverBuckleStatus")return asMap(v,{0:"0 未系",1:"1 已系"});
+if(k==="autoShiftDriverDoorStatus")return asMap(v,{0:"0 打开",1:"1 关闭"});
+if(k==="autoShiftDriverUnbuckled")return asMap(v,{0:"0 无",1:"1 有人未系",2:"2 SNA"});
+if(k==="autoShiftDasAutopilotState")return autoShiftAp(v);
+if(k==="autoShiftDasLssState")return asMap(v,{0:"0 FAULT",1:"1 LDW",2:"2 LKA",3:"3 ELK",4:"4 MONITOR",6:"6 ABORT",7:"7 OFF"});
+if(k==="autoShiftDasFleetSpeedState")return asMap(v,{0:"0 UNAVAILABLE",1:"1 AVAILABLE",2:"2 ACTIVE",3:"3 HOLD"});
+if(k==="autoShiftDasHandsOnState")return asMap(v,{0:"0 NOT_REQD",1:"1 REQD_DETECTED",2:"2 NOT_DETECTED",3:"3 VISUAL",4:"4 CHIME_1",5:"5 CHIME_2",6:"6 SLOWING",7:"7 STRUCK_OUT",15:"15 SNA"});
+if(k==="autoShiftDasPmmSysFaultReason")return asMap(v,{0:"0 NONE",1:"1 DAS_DISABLED",2:"2 SPEED",3:"3 DI_FAULT",4:"4 STEER_RATE",5:"5 USER_DISABLED",6:"6 ROAD_TYPE",7:"7 BRAKE_INHIBIT"});
+if(k==="autoShiftDasCsaState")return asMap(v,{0:"0 UNAVAILABLE",1:"1 AVAILABLE",2:"2 ENABLE",3:"3 HOLD"});
+if(k==="autoShiftDasRobState")return asMap(v,{0:"0 INHIBITED",1:"1 MEASURE",2:"2 ACTIVE",3:"3 MAPLESS"});
+if(k==="autoShiftDasDriverInteractionLevel")return asMap(v,{0:"0 DRIVER_INTERACTING",1:"1 NOT_INTERACTING",2:"2 CONTINUED_NOT_INTERACTING"});
 if(k==="offsetRaw")return (Number(v||0)/4).toFixed(1)+"%";
 if(k==="dasLcHandsOnReasonSeen")return yesNo(v);
 if(k==="dasLcHandsOnReasonDecode")return ["已解码 / Decoded","未收到0x5D9 / No 0x5D9","DLC不足 / Bad DLC","缺DBC bit定义 / Missing bit layout","值超范围 / Invalid value"][v]||v;
@@ -385,8 +445,43 @@ if(reasonEl)reasonEl.textContent=items.length?items.slice(0,5).map(x=>(x.sev===2
 if(adviceEl)adviceEl.textContent=level===2?"优先关闭抓包调试或切到功能ID过滤，复测关键功能":(level===1?"观察是否持续；必要时关闭WebUI轮询或减少抓包":"保持当前设置");
 lastDiag=j;
 }
+function updateAutoShiftDiag(j){
+const bad=[],warn=[];
+const n=k=>Number(j[k]);
+const need=(k,want,label)=>{const v=n(k);if(v===255||Number.isNaN(v))warn.push(label+" 未收到");else if(v!==want)bad.push(label+"="+fmtStat(k,v))};
+const oneOf=(k,vals,label)=>{const v=n(k);if(v===255||Number.isNaN(v))warn.push(label+" 未收到");else if(!vals.includes(v))bad.push(label+"="+fmtStat(k,v))};
+need("autoShiftGtwSmartShiftStatus",1,"GTW Smart Shift");
+need("autoShiftGtwPrimaryGearControlStatus",1,"GTW 换挡资格");
+need("autoShiftGtwGearStripEnable",1,"GTW gear strip");
+need("autoShiftDiSmartShiftUnavailableReason",1,"DI Smart Shift原因");
+oneOf("autoShiftDiSmartShiftGear",[1,2],"DI 推荐挡位");
+need("autoShiftDiFrontBlocked",0,"前方阻挡");
+need("autoShiftDiRearBlocked",0,"后方阻挡");
+oneOf("autoShiftDasUpcomingDirection",[1,2],"DAS即将换挡方向");
+oneOf("autoShiftDasTorqueDirection",[2,3],"DAS扭矩方向");
+oneOf("autoShiftDiGear",[1,2,4],"DI 当前挡位");
+oneOf("autoShiftDiSystemState",[1,2,5],"DI系统状态");
+need("autoShiftUiEnableFsd",1,"UI FSD启用");
+need("autoShiftUiHasFsd",1,"UI FSD权限");
+need("autoShiftUiFsdSuspended",0,"UI FSD暂停");
+need("autoShiftUiStartFromPark",1,"UI P档启动FSD");
+oneOf("autoShiftDasAutopilotState",[2,3,4,5,6],"DAS AP状态");
+oneOf("autoShiftDasHandsOnState",[0,1],"DAS hands-on");
+need("autoShiftDasPmmSysFaultReason",0,"DAS PMM故障");
+oneOf("autoShiftDasCsaState",[1,2,3],"DAS CSA");
+oneOf("autoShiftDasRobState",[1,2,3],"DAS ROB");
+oneOf("autoShiftDasDriverInteractionLevel",[0,1],"DAS驾驶员交互");
+need("autoShiftW330CabinCameraFault",0,"摄像头故障");
+need("autoShiftW372CabinCameraBlocked",0,"摄像头遮挡");
+need("autoShiftW391CabinCameraBlockedOnAp",0,"AP摄像头遮挡");
+need("autoShiftW393AttnMntrUnavailable",0,"注意力监控不可用");
+const e=document.getElementById("autoShiftDiagSummary");if(!e)return;
+if(bad.length){e.textContent="不满足："+bad.slice(0,6).join("；")+(bad.length>6?"；…":"");e.style.color="#f66"}
+else if(warn.length){e.textContent="未完整："+warn.slice(0,6).join("；")+(warn.length>6?"；…":"");e.style.color="#ffd479"}
+else{e.textContent="通过：核心自动换挡链路未发现阻断";e.style.color="#9f9"}
+}
 function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&e.tagName!=="INPUT"&&e.tagName!=="SELECT")e.textContent=fmtStat(k,j[k])})}
-function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
+function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoShiftDiag(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);if(e)p.set(k,getVal(e))});return p}
 function scheduleAutoSave(){if(!loaded)return;clearTimeout(autoSaveTimer);showResult("正在自动保存...");autoSaveTimer=setTimeout(saveConfig,700)}

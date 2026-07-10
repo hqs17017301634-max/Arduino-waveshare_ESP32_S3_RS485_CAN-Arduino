@@ -172,7 +172,7 @@ constexpr uint8_t DAS_LC_REASON_DECODE_NO_FRAME = 1;
 constexpr uint8_t DAS_LC_REASON_DECODE_BAD_DLC = 2;
 constexpr uint8_t DAS_LC_REASON_DECODE_NO_LAYOUT = 3;
 constexpr uint8_t DAS_LC_REASON_DECODE_INVALID_VALUE = 4;
-constexpr uint16_t FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS = 100;
+constexpr uint16_t FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS = 20;
 constexpr uint16_t FSD_ACTIVATION_RESEND_MIN_PERIOD_MS = 1;
 constexpr uint16_t FSD_ACTIVATION_RESEND_MAX_PERIOD_MS = 1000;
 
@@ -187,8 +187,8 @@ struct RuntimeConfig {
   uint16_t fsdActivationResendMs = FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS;
   bool autoSpeedOffsetEnabled = true;
   bool cabinCameraDisableEnabled = false; // when enabled, write 0x3FD mux1 bit43 to 0
-  uint8_t slewPctPerSec = 5;
-  uint8_t lowSpeedMaxPctRaw = 200;    // = MAX_SPEED_OFFSET_PCT * OFFSET_PCT4_RAW_PER_PCT
+  uint8_t slewPctPerSec = 2;
+  uint8_t lowSpeedMaxPctRaw = 240;    // 60% * OFFSET_PCT4_RAW_PER_PCT
 
   uint16_t targetBelow60 = 60;
   uint16_t target60 = 80;
@@ -334,6 +334,55 @@ struct RuntimeStatus {
   uint16_t fsdActivationResendPeriodMs = 0;
   uint32_t fsdActivationResendTxCount = 0;
   uint32_t fsdActivationResendLastTxAgeMs = 0;
+  uint32_t autoShiftUiMux0AgeMs = UINT32_MAX;
+  uint32_t autoShiftUiMux2AgeMs = UINT32_MAX;
+  uint8_t autoShiftUiEnableFsd = 255;
+  uint8_t autoShiftUiHasFsd = 255;
+  uint8_t autoShiftUiFsdSuspended = 255;
+  uint8_t autoShiftUiMux0Valid = 255;
+  uint8_t autoShiftUiStartFromPark = 255;
+  uint8_t autoShiftUiStartFromParkBrakeConfirm = 255;
+  uint8_t autoShiftUiMux2Valid = 255;
+  uint32_t autoShiftGtwGearAgeMs = UINT32_MAX;
+  uint8_t autoShiftGtwSmartShiftStatus = 255;
+  uint8_t autoShiftGtwPrimaryGearControlStatus = 255;
+  uint8_t autoShiftGtwGearStripEnable = 255;
+  uint32_t autoShiftDiSuggestedAgeMs = UINT32_MAX;
+  uint8_t autoShiftDiSmartShiftUnavailableReason = 255;
+  uint8_t autoShiftDiSmartShiftGear = 255;
+  uint8_t autoShiftDiFrontBlocked = 255;
+  uint8_t autoShiftDiRearBlocked = 255;
+  uint32_t autoShiftDasSmartShiftAgeMs = UINT32_MAX;
+  uint8_t autoShiftDasUpcomingDirection = 255;
+  uint8_t autoShiftDasTorqueDirection = 255;
+  uint8_t autoShiftDasBrakeRequired = 255;
+  uint32_t autoShiftDiSystemAgeMs = UINT32_MAX;
+  uint8_t autoShiftDiGear = 255;
+  uint8_t autoShiftDiBrakePedalState = 255;
+  uint8_t autoShiftDiSystemState = 255;
+  uint32_t autoShiftDiSpeedAgeMs = UINT32_MAX;
+  int autoShiftDiVehicleSpeedCx10 = -32768;
+  uint8_t autoShiftDiAccelPedalPressed = 255;
+  uint32_t autoShiftVcfrontAgeMs = UINT32_MAX;
+  uint8_t autoShiftDriverBuckleStatus = 255;
+  uint8_t autoShiftDriverDoorStatus = 255;
+  uint8_t autoShiftDriverUnbuckled = 255;
+  uint32_t autoShiftDasStatusAgeMs = UINT32_MAX;
+  uint8_t autoShiftDasAutopilotState = 255;
+  uint8_t autoShiftDasLssState = 255;
+  uint8_t autoShiftDasFleetSpeedState = 255;
+  uint8_t autoShiftDasHandsOnState = 255;
+  uint32_t autoShiftDasStatus2AgeMs = UINT32_MAX;
+  uint8_t autoShiftDasPmmSysFaultReason = 255;
+  uint8_t autoShiftDasCsaState = 255;
+  uint8_t autoShiftDasRobState = 255;
+  uint8_t autoShiftDasDriverInteractionLevel = 255;
+  uint32_t autoShiftAppWarn5AgeMs = UINT32_MAX;
+  uint8_t autoShiftW330CabinCameraFault = 255;
+  uint8_t autoShiftW372CabinCameraBlocked = 255;
+  uint32_t autoShiftAppWarn6AgeMs = UINT32_MAX;
+  uint8_t autoShiftW391CabinCameraBlockedOnAp = 255;
+  uint8_t autoShiftW393AttnMntrUnavailable = 255;
   uint32_t webTaskMaxUs = 0;
   uint32_t totalHeapBytes = 0;
   uint32_t freeHeapBytes = 0;
@@ -644,6 +693,18 @@ static uint32_t batteryPreheatBms312LastRxMs = 0;
 static uint32_t batteryPreheatBms3b2LastRxMs = 0;
 static uint32_t batteryPreheatVcfrontLastRxMs = 0;
 static uint32_t dasCarLogLastRxMs = 0;
+static uint32_t autoShiftUiMux0LastRxMs = 0;
+static uint32_t autoShiftUiMux2LastRxMs = 0;
+static uint32_t autoShiftGtwGearLastRxMs = 0;
+static uint32_t autoShiftDiSuggestedLastRxMs = 0;
+static uint32_t autoShiftDasSmartShiftLastRxMs = 0;
+static uint32_t autoShiftDiSystemLastRxMs = 0;
+static uint32_t autoShiftDiSpeedLastRxMs = 0;
+static uint32_t autoShiftVcfrontLastRxMs = 0;
+static uint32_t autoShiftDasStatusLastRxMs = 0;
+static uint32_t autoShiftDasStatus2LastRxMs = 0;
+static uint32_t autoShiftAppWarn5LastRxMs = 0;
+static uint32_t autoShiftAppWarn6LastRxMs = 0;
 static uint32_t dasLcHandsOnReasonPreviousMs = 0;
 static uint32_t dasLcHandsOnReasonLatestMs = 0;
 static can_frame fsdActivationResendFrames[3] = {};
@@ -861,6 +922,13 @@ constexpr uint32_t CAN_ID_BMS_LOG2 = 0x3B2;
 constexpr uint32_t CAN_ID_BMS_PACK_TEMPERATURES = 0x712;
 constexpr uint32_t CAN_ID_DAS_STATUS = 0x399;
 constexpr uint32_t CAN_ID_DAS_CAR_LOG = 0x5D9;
+constexpr uint32_t CAN_ID_DAS_AUTOPILOT_DEBUG = 0x247;
+constexpr uint32_t CAN_ID_DAS_SMART_SHIFT = 0x12B;
+constexpr uint32_t CAN_ID_DI_SUGGESTED_GEAR = 0x255;
+constexpr uint32_t CAN_ID_GTW_GEAR_CONTROL = 0x678;
+constexpr uint32_t CAN_ID_VCFRONT_VEHICLE_STATUS = 0x3A1;
+constexpr uint32_t CAN_ID_APP_WARNING_MATRIX6 = 0x47D;
+constexpr uint32_t CAN_ID_APP_WARNING_MATRIX5 = 0x47F;
 constexpr uint32_t CAN_ID_UI_VEHICLE_CONTROL2 = 0x3B3;
 constexpr uint32_t CAN_ID_VCFRONT_ALERT_MATRIX = 0x340;
 constexpr uint32_t CAN_ID_VCFRONT1_ALERT_MATRIX = 0x341;
@@ -906,6 +974,13 @@ static inline bool isRelevantCanId(uint32_t canId) {
          canId == CAN_ID_BMS_PACK_TEMPERATURES ||
          canId == CAN_ID_DAS_STATUS ||
          canId == CAN_ID_DAS_CAR_LOG ||
+         canId == CAN_ID_DAS_AUTOPILOT_DEBUG ||
+         canId == CAN_ID_DAS_SMART_SHIFT ||
+         canId == CAN_ID_DI_SUGGESTED_GEAR ||
+         canId == CAN_ID_GTW_GEAR_CONTROL ||
+         canId == CAN_ID_VCFRONT_VEHICLE_STATUS ||
+         canId == CAN_ID_APP_WARNING_MATRIX6 ||
+         canId == CAN_ID_APP_WARNING_MATRIX5 ||
          canId == CAN_ID_UI_VEHICLE_CONTROL2 ||
          canId == CAN_ID_VCFRONT_ALERT_MATRIX ||
          canId == CAN_ID_USM_ALERT_MATRIX ||
@@ -3017,6 +3092,120 @@ static bool readSignedBitsLE(const can_frame& frame, uint8_t startBit, uint8_t l
   return true;
 }
 
+static bool readBitsU8(const can_frame& frame, uint8_t startBit, uint8_t length, uint8_t& value) {
+  uint32_t raw = 0;
+  if (!readBitsLE(frame, startBit, length, raw)) return false;
+  value = static_cast<uint8_t>(raw & 0xFF);
+  return true;
+}
+
+static void handleAutoShiftDiagFrame(const can_frame& frame) {
+  const uint32_t now = millis();
+  uint8_t v = 0;
+  uint32_t raw = 0;
+
+  if (frame.can_id == CAN_ID_AP_CONTROL && frame.can_dlc >= 8) {
+    const uint8_t mux = readMuxID(frame);
+    if (mux == 0) {
+      autoShiftUiMux0LastRxMs = now;
+      g_status.autoShiftUiEnableFsd = (frame.data[5] >> 6) & 0x01;
+      g_status.autoShiftUiHasFsd = (frame.data[5] >> 7) & 0x01;
+      g_status.autoShiftUiFsdSuspended = (frame.data[6] >> 4) & 0x01;
+      g_status.autoShiftUiMux0Valid = (frame.data[7] >> 7) & 0x01;
+    } else if (mux == 2) {
+      autoShiftUiMux2LastRxMs = now;
+      g_status.autoShiftUiStartFromParkBrakeConfirm = (frame.data[0] >> 6) & 0x01;
+      g_status.autoShiftUiStartFromPark = (frame.data[0] >> 7) & 0x01;
+      g_status.autoShiftUiMux2Valid = (frame.data[7] >> 7) & 0x01;
+    }
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_GTW_GEAR_CONTROL && frame.can_dlc >= 5) {
+    autoShiftGtwGearLastRxMs = now;
+    if (readBitsU8(frame, 24, 4, v)) g_status.autoShiftGtwSmartShiftStatus = v;
+    if (readBitsU8(frame, 16, 4, v)) g_status.autoShiftGtwPrimaryGearControlStatus = v;
+    if (readBitsU8(frame, 20, 1, v)) g_status.autoShiftGtwGearStripEnable = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_DI_SUGGESTED_GEAR && frame.can_dlc >= 4) {
+    autoShiftDiSuggestedLastRxMs = now;
+    if (readBitsU8(frame, 26, 5, v)) g_status.autoShiftDiSmartShiftUnavailableReason = v;
+    if (readBitsU8(frame, 24, 2, v)) g_status.autoShiftDiSmartShiftGear = v;
+    if (readBitsU8(frame, 16, 1, v)) g_status.autoShiftDiFrontBlocked = v;
+    if (readBitsU8(frame, 17, 1, v)) g_status.autoShiftDiRearBlocked = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_DAS_SMART_SHIFT && frame.can_dlc >= 4) {
+    autoShiftDasSmartShiftLastRxMs = now;
+    if (readBitsU8(frame, 22, 2, v)) g_status.autoShiftDasUpcomingDirection = v;
+    if (readBitsU8(frame, 12, 3, v)) g_status.autoShiftDasTorqueDirection = v;
+    if (readBitsU8(frame, 24, 1, v)) g_status.autoShiftDasBrakeRequired = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_DI_SYSTEM_STATUS && frame.can_dlc >= 4) {
+    autoShiftDiSystemLastRxMs = now;
+    if (readBitsU8(frame, 21, 3, v)) g_status.autoShiftDiGear = v;
+    if (readBitsU8(frame, 19, 2, v)) g_status.autoShiftDiBrakePedalState = v;
+    if (readBitsU8(frame, 16, 3, v)) g_status.autoShiftDiSystemState = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_VEHICLE_SPEED && frame.can_dlc >= 7) {
+    autoShiftDiSpeedLastRxMs = now;
+    if (readBitsLE(frame, 43, 13, raw)) {
+      g_status.autoShiftDiVehicleSpeedCx10 =
+          raw == 0x1FFF ? -32768 : static_cast<int>(static_cast<int32_t>(raw) * 8 - 4000) / 10;
+    }
+    if (readBitsU8(frame, 34, 1, v)) g_status.autoShiftDiAccelPedalPressed = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_VCFRONT_VEHICLE_STATUS && frame.can_dlc >= 5) {
+    const uint8_t mux = readMuxID(frame);
+    if (mux != 0) return;
+    autoShiftVcfrontLastRxMs = now;
+    if (readBitsU8(frame, 30, 1, v)) g_status.autoShiftDriverBuckleStatus = v;
+    if (readBitsU8(frame, 31, 1, v)) g_status.autoShiftDriverDoorStatus = v;
+    if (readBitsU8(frame, 32, 2, v)) g_status.autoShiftDriverUnbuckled = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_DAS_STATUS && frame.can_dlc >= 8) {
+    autoShiftDasStatusLastRxMs = now;
+    if (readBitsU8(frame, 0, 4, v)) g_status.autoShiftDasAutopilotState = v;
+    if (readBitsU8(frame, 29, 3, v)) g_status.autoShiftDasLssState = v;
+    if (readBitsU8(frame, 40, 2, v)) g_status.autoShiftDasFleetSpeedState = v;
+    if (readBitsU8(frame, 42, 4, v)) g_status.autoShiftDasHandsOnState = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_DAS_STATUS2 && frame.can_dlc >= 5) {
+    autoShiftDasStatus2LastRxMs = now;
+    if (readBitsU8(frame, 21, 3, v)) g_status.autoShiftDasPmmSysFaultReason = v;
+    if (readBitsU8(frame, 32, 2, v)) g_status.autoShiftDasCsaState = v;
+    if (readBitsU8(frame, 36, 2, v)) g_status.autoShiftDasRobState = v;
+    if (readBitsU8(frame, 38, 2, v)) g_status.autoShiftDasDriverInteractionLevel = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_APP_WARNING_MATRIX5 && frame.can_dlc >= 7) {
+    autoShiftAppWarn5LastRxMs = now;
+    if (readBitsU8(frame, 9, 1, v)) g_status.autoShiftW330CabinCameraFault = v;
+    if (readBitsU8(frame, 51, 1, v)) g_status.autoShiftW372CabinCameraBlocked = v;
+    return;
+  }
+
+  if (frame.can_id == CAN_ID_APP_WARNING_MATRIX6 && frame.can_dlc >= 2) {
+    autoShiftAppWarn6LastRxMs = now;
+    if (readBitsU8(frame, 6, 1, v)) g_status.autoShiftW391CabinCameraBlockedOnAp = v;
+    if (readBitsU8(frame, 8, 1, v)) g_status.autoShiftW393AttnMntrUnavailable = v;
+  }
+}
+
 static bool decodeBms712TempCx100(uint8_t lo, uint8_t hi, int16_t& out) {
   const uint16_t raw = static_cast<uint16_t>(lo | (static_cast<uint16_t>(hi) << 8));
   if (raw == 0 || raw == 0x8000 || raw == 0xFFFF || raw > 12000) return false;
@@ -3905,6 +4094,18 @@ static void handleStatus() {
   s.batteryPreheatBmsHeatStatus = (bms312Fresh || bms3b2Fresh) ? 1 : 0;
   s.bmsTempDecodedAgeMs =
       bmsTempDecodedLastRxMs == 0 ? 0 : (now - bmsTempDecodedLastRxMs);
+  s.autoShiftUiMux0AgeMs = autoShiftUiMux0LastRxMs == 0 ? UINT32_MAX : (now - autoShiftUiMux0LastRxMs);
+  s.autoShiftUiMux2AgeMs = autoShiftUiMux2LastRxMs == 0 ? UINT32_MAX : (now - autoShiftUiMux2LastRxMs);
+  s.autoShiftGtwGearAgeMs = autoShiftGtwGearLastRxMs == 0 ? UINT32_MAX : (now - autoShiftGtwGearLastRxMs);
+  s.autoShiftDiSuggestedAgeMs = autoShiftDiSuggestedLastRxMs == 0 ? UINT32_MAX : (now - autoShiftDiSuggestedLastRxMs);
+  s.autoShiftDasSmartShiftAgeMs = autoShiftDasSmartShiftLastRxMs == 0 ? UINT32_MAX : (now - autoShiftDasSmartShiftLastRxMs);
+  s.autoShiftDiSystemAgeMs = autoShiftDiSystemLastRxMs == 0 ? UINT32_MAX : (now - autoShiftDiSystemLastRxMs);
+  s.autoShiftDiSpeedAgeMs = autoShiftDiSpeedLastRxMs == 0 ? UINT32_MAX : (now - autoShiftDiSpeedLastRxMs);
+  s.autoShiftVcfrontAgeMs = autoShiftVcfrontLastRxMs == 0 ? UINT32_MAX : (now - autoShiftVcfrontLastRxMs);
+  s.autoShiftDasStatusAgeMs = autoShiftDasStatusLastRxMs == 0 ? UINT32_MAX : (now - autoShiftDasStatusLastRxMs);
+  s.autoShiftDasStatus2AgeMs = autoShiftDasStatus2LastRxMs == 0 ? UINT32_MAX : (now - autoShiftDasStatus2LastRxMs);
+  s.autoShiftAppWarn5AgeMs = autoShiftAppWarn5LastRxMs == 0 ? UINT32_MAX : (now - autoShiftAppWarn5LastRxMs);
+  s.autoShiftAppWarn6AgeMs = autoShiftAppWarn6LastRxMs == 0 ? UINT32_MAX : (now - autoShiftAppWarn6LastRxMs);
 #ifdef ENABLE_CANB_MCP2515
   s.dndLastTriggerAgeMs = dndLastTriggerMs == 0 ? 0 : (now - dndLastTriggerMs);
   s.dndScrollCacheAgeMs = canbLastVcleftMux1Ms == 0 ? 0 : (now - canbLastVcleftMux1Ms);
@@ -3948,7 +4149,7 @@ static void handleStatus() {
       fsdActivationResendLastTxMs == 0 ? 0 : (now - fsdActivationResendLastTxMs);
 
   String j;
-  j.reserve(11800);
+  j.reserve(16000);
   j += '{';
   j += "\"canCommsEnabled\":";       j += c.canCommsEnabled ? 1 : 0;
   j += ",\"fsdEnabled\":";           j += c.fsdEnabled ? 1 : 0;
@@ -4068,6 +4269,55 @@ static void handleStatus() {
   j += ",\"fsdActivationResendPeriodMs\":"; j += s.fsdActivationResendPeriodMs;
   j += ",\"fsdActivationResendTxCount\":"; j += s.fsdActivationResendTxCount;
   j += ",\"fsdActivationResendLastTxAgeMs\":"; j += s.fsdActivationResendLastTxAgeMs;
+  j += ",\"autoShiftUiMux0AgeMs\":"; j += s.autoShiftUiMux0AgeMs;
+  j += ",\"autoShiftUiMux2AgeMs\":"; j += s.autoShiftUiMux2AgeMs;
+  j += ",\"autoShiftUiEnableFsd\":"; j += s.autoShiftUiEnableFsd;
+  j += ",\"autoShiftUiHasFsd\":"; j += s.autoShiftUiHasFsd;
+  j += ",\"autoShiftUiFsdSuspended\":"; j += s.autoShiftUiFsdSuspended;
+  j += ",\"autoShiftUiMux0Valid\":"; j += s.autoShiftUiMux0Valid;
+  j += ",\"autoShiftUiStartFromPark\":"; j += s.autoShiftUiStartFromPark;
+  j += ",\"autoShiftUiStartFromParkBrakeConfirm\":"; j += s.autoShiftUiStartFromParkBrakeConfirm;
+  j += ",\"autoShiftUiMux2Valid\":"; j += s.autoShiftUiMux2Valid;
+  j += ",\"autoShiftGtwGearAgeMs\":"; j += s.autoShiftGtwGearAgeMs;
+  j += ",\"autoShiftGtwSmartShiftStatus\":"; j += s.autoShiftGtwSmartShiftStatus;
+  j += ",\"autoShiftGtwPrimaryGearControlStatus\":"; j += s.autoShiftGtwPrimaryGearControlStatus;
+  j += ",\"autoShiftGtwGearStripEnable\":"; j += s.autoShiftGtwGearStripEnable;
+  j += ",\"autoShiftDiSuggestedAgeMs\":"; j += s.autoShiftDiSuggestedAgeMs;
+  j += ",\"autoShiftDiSmartShiftUnavailableReason\":"; j += s.autoShiftDiSmartShiftUnavailableReason;
+  j += ",\"autoShiftDiSmartShiftGear\":"; j += s.autoShiftDiSmartShiftGear;
+  j += ",\"autoShiftDiFrontBlocked\":"; j += s.autoShiftDiFrontBlocked;
+  j += ",\"autoShiftDiRearBlocked\":"; j += s.autoShiftDiRearBlocked;
+  j += ",\"autoShiftDasSmartShiftAgeMs\":"; j += s.autoShiftDasSmartShiftAgeMs;
+  j += ",\"autoShiftDasUpcomingDirection\":"; j += s.autoShiftDasUpcomingDirection;
+  j += ",\"autoShiftDasTorqueDirection\":"; j += s.autoShiftDasTorqueDirection;
+  j += ",\"autoShiftDasBrakeRequired\":"; j += s.autoShiftDasBrakeRequired;
+  j += ",\"autoShiftDiSystemAgeMs\":"; j += s.autoShiftDiSystemAgeMs;
+  j += ",\"autoShiftDiGear\":"; j += s.autoShiftDiGear;
+  j += ",\"autoShiftDiBrakePedalState\":"; j += s.autoShiftDiBrakePedalState;
+  j += ",\"autoShiftDiSystemState\":"; j += s.autoShiftDiSystemState;
+  j += ",\"autoShiftDiSpeedAgeMs\":"; j += s.autoShiftDiSpeedAgeMs;
+  j += ",\"autoShiftDiVehicleSpeedCx10\":"; j += s.autoShiftDiVehicleSpeedCx10;
+  j += ",\"autoShiftDiAccelPedalPressed\":"; j += s.autoShiftDiAccelPedalPressed;
+  j += ",\"autoShiftVcfrontAgeMs\":"; j += s.autoShiftVcfrontAgeMs;
+  j += ",\"autoShiftDriverBuckleStatus\":"; j += s.autoShiftDriverBuckleStatus;
+  j += ",\"autoShiftDriverDoorStatus\":"; j += s.autoShiftDriverDoorStatus;
+  j += ",\"autoShiftDriverUnbuckled\":"; j += s.autoShiftDriverUnbuckled;
+  j += ",\"autoShiftDasStatusAgeMs\":"; j += s.autoShiftDasStatusAgeMs;
+  j += ",\"autoShiftDasAutopilotState\":"; j += s.autoShiftDasAutopilotState;
+  j += ",\"autoShiftDasLssState\":"; j += s.autoShiftDasLssState;
+  j += ",\"autoShiftDasFleetSpeedState\":"; j += s.autoShiftDasFleetSpeedState;
+  j += ",\"autoShiftDasHandsOnState\":"; j += s.autoShiftDasHandsOnState;
+  j += ",\"autoShiftDasStatus2AgeMs\":"; j += s.autoShiftDasStatus2AgeMs;
+  j += ",\"autoShiftDasPmmSysFaultReason\":"; j += s.autoShiftDasPmmSysFaultReason;
+  j += ",\"autoShiftDasCsaState\":"; j += s.autoShiftDasCsaState;
+  j += ",\"autoShiftDasRobState\":"; j += s.autoShiftDasRobState;
+  j += ",\"autoShiftDasDriverInteractionLevel\":"; j += s.autoShiftDasDriverInteractionLevel;
+  j += ",\"autoShiftAppWarn5AgeMs\":"; j += s.autoShiftAppWarn5AgeMs;
+  j += ",\"autoShiftW330CabinCameraFault\":"; j += s.autoShiftW330CabinCameraFault;
+  j += ",\"autoShiftW372CabinCameraBlocked\":"; j += s.autoShiftW372CabinCameraBlocked;
+  j += ",\"autoShiftAppWarn6AgeMs\":"; j += s.autoShiftAppWarn6AgeMs;
+  j += ",\"autoShiftW391CabinCameraBlockedOnAp\":"; j += s.autoShiftW391CabinCameraBlockedOnAp;
+  j += ",\"autoShiftW393AttnMntrUnavailable\":"; j += s.autoShiftW393AttnMntrUnavailable;
   j += ",\"webTaskMaxUs\":";         j += s.webTaskMaxUs;
   j += ",\"totalHeapBytes\":";       j += s.totalHeapBytes;
   j += ",\"freeHeapBytes\":";        j += s.freeHeapBytes;
@@ -4761,6 +5011,7 @@ static void handleTwaiFrame(can_frame& frame, const RuntimeConfig& cfg) {
   speedLimitMonitor.update(frame);
   handleNagKillerContextFrame(frame, cfg);
   handleDasCarLogFrame(frame);
+  handleAutoShiftDiagFrame(frame);
 #ifdef ENABLE_CANB_MCP2515
   handleDndHandsOnFrame(frame);
 #endif
