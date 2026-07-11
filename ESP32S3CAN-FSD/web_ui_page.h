@@ -24,6 +24,7 @@ input[type=checkbox]:before{content:"";position:absolute;width:21px;height:21px;
 input[type=checkbox]:checked{background:var(--ok);border-color:var(--ok)}input[type=checkbox]:checked:before{left:23px;background:#fff}
 .signed{display:flex;align-items:center;gap:6px;color:var(--text)}.signed b{min-width:10px;text-align:right}.signed em{font-style:normal;color:var(--muted);font-size:12px}
 button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px solid transparent;border-radius:8px;padding:9px 13px;margin:4px 4px 0 0;font-size:14px;font-weight:650;text-decoration:none}button.alt,.linkbtn{background:var(--btn2)}button.warn{background:#a64040}button.ghost{background:transparent;color:var(--accent);border-color:var(--line)}.linkbtn{display:none}
+.profileButtons{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:8px 0 10px}.profileButtons button{width:100%;min-width:0;margin:0;padding:8px 4px;background:var(--panel2);color:var(--text);border-color:var(--line)}.profileButtons button.active{background:var(--btn2);color:#fff;border-color:var(--btn2)}
 .kv{display:flex;justify-content:space-between;align-items:flex-start;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line2);gap:14px}.kv span{min-width:0}.kv span:first-child{color:var(--muted)}.kv span:last-child{color:var(--ok);font-variant-numeric:tabular-nums;text-align:right;word-break:break-word;overflow-wrap:anywhere;max-width:62%}.kv b{font-weight:700}
 .result{display:none;font-size:12px;color:var(--warn);margin:8px 0 0;flex-basis:100%}.result:not(:empty){display:block;min-height:18px}.bar{position:sticky;top:0;z-index:5;background:var(--bar);backdrop-filter:blur(6px);display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:8px;margin-bottom:12px}
 .pageSwitch{display:inline-flex;justify-content:flex-start;align-items:center;gap:8px;margin:4px 0 0 auto;font-size:13px;color:var(--muted);min-height:36px}.pollSwitch{display:inline-flex;gap:8px;align-items:center;min-height:0;margin:0 0 0 10px;color:var(--muted);font-size:13px;font-weight:400}.pollSwitch input{width:40px;height:24px;min-width:40px}.pollSwitch input:before{width:18px;height:18px}.pollSwitch input:checked:before{left:18px}.hidden{display:none!important}
@@ -65,9 +66,12 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <label>开启CAN通讯<input type="checkbox" id="canCommsEnabled"></label>
 <label>FSD 启用<input type="checkbox" id="fsdEnabled"></label>
 <label>FSD 激活帧补发<input type="checkbox" id="fsdActivationResendEnabled"></label>
-<label>自动速度偏移<input type="checkbox" id="autoSpeedOffsetEnabled"></label>
+<label id="hw3AutoSpeedOffsetRow">自动速度偏移<input type="checkbox" id="autoSpeedOffsetEnabled"></label>
 <label>HW4 速度偏移 +15<input type="checkbox" id="hw4SpeedOffsetPlus15Enabled"></label>
+<label>HW4 最大速度偏移 60%<input type="checkbox" id="hw4SpeedOffset60Enabled"></label>
+<label>HW4 自定义速度偏移<input type="checkbox" id="hw4CustomSpeedOffsetEnabled"></label>
 <label>HW4 ISA 提示静音<input type="checkbox" id="hw4IsaChimeSuppressEnabled"></label>
+<label>增强Autopilot / Smart Summon<input type="checkbox" id="enhancedAutopilotEnabled"></label>
 <label>免打扰<input type="checkbox" id="cabinCameraDisableEnabled"></label>
 <label>高光爆闪启用<input type="checkbox" id="highBeamStrobeEnabled"></label>
 <label>后雾灯刹车爆闪启用<input type="checkbox" id="rearFogBrakeStrobeEnabled"></label>
@@ -80,9 +84,30 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <h2>FSD / 速度参数</h2>
 <label>FSD 激活车型<select id="fsdActivationProfile"><option value="0">V12/V13 / HW3</option><option value="1">V14 / HW4</option></select></label>
 <div class="kv" id="hw4ProfileRow" style="display:none"><span>跟车距离 / 驾驶模式</span><span><b id="hw4FollowDistanceText">-</b> / <b id="hw4DrivingProfileText">-</b></span></div>
+<div id="hw4ProfileControls" style="display:none">
+<div class="profileButtons">
+<button type="button" data-hw4-profile="3" onclick="selectHw4Profile(3)">1</button>
+<button type="button" data-hw4-profile="2" onclick="selectHw4Profile(2)">2</button>
+<button type="button" data-hw4-profile="1" onclick="selectHw4Profile(1)">3</button>
+<button type="button" data-hw4-profile="0" onclick="selectHw4Profile(0)">4</button>
+<button type="button" data-hw4-profile="4" onclick="selectHw4Profile(4)">5</button>
+</div>
+<label>HW4 缓降 %/秒<input type="number" id="hw4SlewPctPerSec" min="0" max="60" step="1"></label>
+<div class="kv"><span>HW4 偏移目标 / 当前</span><span><b id="hw4OffsetTargetPct">-</b> / <b id="hw4OffsetSentPct">-</b></span></div>
+<div id="hw4CustomSpeedOffsetFields" style="display:none">
+<label>HW4 目标速度 &lt;60<input type="number" id="hw4TargetBelow60" min="0" max="255"></label>
+<label>HW4 目标速度 60..69<input type="number" id="hw4Target60" min="0" max="255"></label>
+<label>HW4 目标速度 70..79<input type="number" id="hw4Target70" min="0" max="255"></label>
+<label>HW4 目标速度 80..89<input type="number" id="hw4Target80" min="0" max="255"></label>
+<label>HW4 目标速度 90..99<input type="number" id="hw4Target90" min="0" max="255"></label>
+<label>HW4 目标速度 100..119<input type="number" id="hw4Target100" min="0" max="255"></label>
+<label>HW4 目标速度 120..139<input type="number" id="hw4Target120" min="0" max="255"></label>
+</div>
+</div>
 <label>补发周期 ms<input type="number" id="fsdActivationResendMs" min="1" max="1000" step="1"></label>
 <div class="kv"><span>补发状态 / 周期</span><span><b id="fsdActivationResendActive">-</b> / <b id="fsdActivationResendPeriodMs">-</b></span></div>
 <div class="kv"><span>补发次数 / mux0缓存</span><span><b id="fsdActivationResendTxCount">-</b> / <b id="fsdActivationResendCachedMuxMask">-</b></span></div>
+<div id="hw3SpeedOffsetFields">
 <label>缓降百分比/秒<input type="number" id="slewPctPerSec" min="0" max="100"></label>
 <label>低速最大偏移 %<input type="number" id="lowSpeedMaxPctRaw" min="0" max="60" step="0.25"></label>
 <label>目标速度 &lt;60<input type="number" id="targetBelow60" min="0" max="255"></label>
@@ -92,6 +117,7 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <label>目标速度 90..99<input type="number" id="target90" min="0" max="255"></label>
 <label>目标速度 100..119<input type="number" id="target100" min="0" max="255"></label>
 <label>目标速度 120..139<input type="number" id="target120" min="0" max="255"></label>
+</div>
 </div>
 
 <div class="card wide">
@@ -244,7 +270,7 @@ function applyTheme(t){document.documentElement.setAttribute("data-theme",t);con
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
 function closeLegalNotice(){const e=document.getElementById("legalNotice");if(e)e.classList.add("hidden")}
-const cfgIds=["canCommsEnabled","fsdEnabled","fsdActivationProfile","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","hw4SpeedOffsetPlus15Enabled","hw4IsaChimeSuppressEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","can1ReceiveOnly"];
+const cfgIds=["canCommsEnabled","fsdEnabled","fsdActivationProfile","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","hw4SpeedOffsetPlus15Enabled","hw4SpeedOffset60Enabled","hw4CustomSpeedOffsetEnabled","hw4SlewPctPerSec","hw4IsaChimeSuppressEnabled","enhancedAutopilotEnabled","hw4TargetBelow60","hw4Target60","hw4Target70","hw4Target80","hw4Target90","hw4Target100","hw4Target120","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(60,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(240,Math.round((Number(e.value)||0)*4)));return e.value}
@@ -359,6 +385,7 @@ if(k==="autoShiftDasPmmSysFaultReason")return asMap(v,{0:"0 NONE",1:"1 DAS_DISAB
 if(k==="autoShiftDasCsaState")return asMap(v,{0:"0 UNAVAILABLE",1:"1 AVAILABLE",2:"2 ENABLE",3:"3 HOLD"});
 if(k==="autoShiftDasRobState")return asMap(v,{0:"0 INHIBITED",1:"1 MEASURE",2:"2 ACTIVE",3:"3 MAPLESS"});
 if(k==="autoShiftDasDriverInteractionLevel")return asMap(v,{0:"0 DRIVER_INTERACTING",1:"1 NOT_INTERACTING",2:"2 CONTINUED_NOT_INTERACTING"});
+if(k==="hw4OffsetTargetPct"||k==="hw4OffsetSentPct")return v+"%";
 if(k==="offsetRaw")return (Number(v||0)/4).toFixed(1)+"%";
 if(k==="dasLcHandsOnReasonSeen")return yesNo(v);
 if(k==="dasLcHandsOnReasonDecode")return ["已解码 / Decoded","未收到0x5D9 / No 0x5D9","DLC不足 / Bad DLC","缺DBC bit定义 / Missing bit layout","值超范围 / Invalid value"][v]||v;
@@ -485,13 +512,17 @@ else if(warn.length){e.textContent="未完整："+warn.slice(0,6).join("；")+(w
 else{e.textContent="通过：核心自动换挡链路未发现阻断";e.style.color="#9f9"}
 }
 function hw4DrivingProfileText(v){return ["0 Chill","1 Normal","2 Hurry","3 Max","4 Sloth"][Number(v)]||"-"}
-function updateHw4Profile(j){const row=document.getElementById("hw4ProfileRow"),fd=document.getElementById("hw4FollowDistanceText"),pf=document.getElementById("hw4DrivingProfileText");if(!row||!fd||!pf)return;const isV14=Number(j.fsdActivationProfile)===1;row.style.display=isV14?"":"none";if(!isV14)return;const d=Number(j.hw4FollowDistance||0);fd.textContent=d>0?String(d):"-";pf.textContent=hw4DrivingProfileText(j.hw4DrivingProfile)}
+function updateHw4CustomUi(){const profile=document.getElementById("fsdActivationProfile"),custom=document.getElementById("hw4CustomSpeedOffsetEnabled"),fields=document.getElementById("hw4CustomSpeedOffsetFields");if(fields)fields.style.display=profile&&Number(profile.value)===1&&custom&&custom.checked?"":"none"}
+function updateFsdProfileUi(profile){const isV14=Number(profile)===1;["hw4ProfileRow","hw4ProfileControls"].forEach(id=>{const e=document.getElementById(id);if(e)e.style.display=isV14?"":"none"});["hw3AutoSpeedOffsetRow","hw3SpeedOffsetFields"].forEach(id=>{const e=document.getElementById(id);if(e)e.style.display=isV14?"none":""});updateHw4CustomUi()}
+function setHw4ProfileButtons(profile){document.querySelectorAll("[data-hw4-profile]").forEach(b=>b.classList.toggle("active",Number(b.dataset.hw4Profile)===Number(profile)))}
+function selectHw4Profile(profile){const pf=document.getElementById("hw4DrivingProfileText"),p=new URLSearchParams();if(pf)pf.textContent=hw4DrivingProfileText(profile);setHw4ProfileButtons(profile);showResult("正在自动保存...");p.set("hw4DrivingProfileSetting",profile);fetch("/config",{method:"POST",body:p}).then(r=>{if(!r.ok)throw new Error("config");return fetch("/save",{method:"POST"})}).then(r=>{if(!r.ok)throw new Error("save");showResult("已自动保存");pollStatus()}).catch(()=>{showResult("自动保存失败");pollStatus()})}
+function updateHw4Profile(j){updateFsdProfileUi(j.fsdActivationProfile);if(Number(j.fsdActivationProfile)!==1)return;const fd=document.getElementById("hw4FollowDistanceText"),pf=document.getElementById("hw4DrivingProfileText");const d=Number(j.hw4FollowDistance||0),p=Number(j.hw4DrivingProfile);if(fd)fd.textContent=d>0?String(d):"-";if(pf)pf.textContent=hw4DrivingProfileText(p);setHw4ProfileButtons(p)}
 function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&e.tagName!=="INPUT"&&e.tagName!=="SELECT")e.textContent=fmtStat(k,j[k])})}
-function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateHw4Profile(j);updateAutoShiftDiag(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
+function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}updateStats(j);updateHw4Profile(j);updateAutoShiftDiag(j);updateAutoDiag(j)}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);if(e)p.set(k,getVal(e))});return p}
 function scheduleAutoSave(){if(!loaded)return;clearTimeout(autoSaveTimer);showResult("正在自动保存...");autoSaveTimer=setTimeout(saveConfig,700)}
-function bindAutoSave(){cfgIds.forEach(k=>{const e=document.getElementById(k);if(!e)return;const ev=(e.type==="checkbox"||e.tagName==="SELECT")?"change":"input";e.addEventListener(ev,scheduleAutoSave);if(ev==="input")e.addEventListener("change",scheduleAutoSave)})}
+function bindAutoSave(){cfgIds.forEach(k=>{const e=document.getElementById(k);if(!e||e.type==="hidden")return;const ev=(e.type==="checkbox"||e.tagName==="SELECT")?"change":"input";e.addEventListener(ev,scheduleAutoSave);if(ev==="input")e.addEventListener("change",scheduleAutoSave)});const p=document.getElementById("fsdActivationProfile"),s15=document.getElementById("hw4SpeedOffsetPlus15Enabled"),s60=document.getElementById("hw4SpeedOffset60Enabled"),custom=document.getElementById("hw4CustomSpeedOffsetEnabled");if(p)p.addEventListener("change",()=>updateFsdProfileUi(p.value));if(s15)s15.addEventListener("change",()=>{if(s15.checked){if(s60)s60.checked=false;if(custom)custom.checked=false}updateHw4CustomUi()});if(s60)s60.addEventListener("change",()=>{if(s60.checked){if(s15)s15.checked=false;if(custom)custom.checked=false}updateHw4CustomUi()});if(custom)custom.addEventListener("change",()=>{if(custom.checked){if(s15)s15.checked=false;if(s60)s60.checked=false}updateHw4CustomUi()})}
 function saveConfig(){if(autoSaveBusy){autoSaveQueued=true;return}autoSaveBusy=true;fetch("/config",{method:"POST",body:body()}).then(r=>{if(!r.ok)throw new Error("config");return fetch("/save",{method:"POST"})}).then(r=>{if(!r.ok)throw new Error("save");showResult("已自动保存");pollStatus()}).catch(()=>showResult("自动保存失败")).finally(()=>{autoSaveBusy=false;if(autoSaveQueued){autoSaveQueued=false;scheduleAutoSave()}})}
 function rebootBoard(){setPolling(false);const p=document.getElementById("poll");if(p)p.checked=false;showResult("正在重启...");fetch("/reboot",{method:"POST"}).catch(()=>{})}
 function recQuery(){const ids=document.getElementById("recIds").value.trim();return ids?("?ids="+encodeURIComponent(ids)):""}
