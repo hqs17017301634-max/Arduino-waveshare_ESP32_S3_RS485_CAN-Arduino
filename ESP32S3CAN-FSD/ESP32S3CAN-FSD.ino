@@ -52,7 +52,9 @@ struct can_frame {
 #include <esp_netif.h>
 #endif
 
-// This build supports the HW3 car only.
+// FSD activation profile selection.
+constexpr uint8_t FSD_PROFILE_V12_V13 = 0;
+constexpr uint8_t FSD_PROFILE_V14_HW4 = 1;
 
 // Pin assignments -- overridable via PlatformIO build_flags (-D...).
 // Defaults match the Waveshare ESP32-S3-RS485-CAN board.
@@ -182,11 +184,14 @@ constexpr uint16_t FSD_ACTIVATION_RESEND_MAX_PERIOD_MS = 1000;
 // equivalent, so behaviour with no WebUI is unchanged.
 struct RuntimeConfig {
   bool fsdEnabled = true;
+  uint8_t fsdActivationProfile = FSD_PROFILE_V12_V13; // 0=V12/V13 HW3, 1=V14 HW4
   bool canCommsEnabled = true;       // master TX gate; keeps non-FSD CAN features independent from FSD activation
   bool fsdActivationResendEnabled = false;
   uint16_t fsdActivationResendMs = FSD_ACTIVATION_RESEND_DEFAULT_PERIOD_MS;
   bool autoSpeedOffsetEnabled = true;
-  bool cabinCameraDisableEnabled = false; // when enabled, write 0x3FD mux1 bit43 to 0
+  bool hw4SpeedOffsetPlus15Enabled = false; // 0x3FD mux2: data[1] low 6 bits = 21
+  bool hw4IsaChimeSuppressEnabled = false;  // 0x399: data[1] |= 0x20 + vehicle checksum
+  bool cabinCameraDisableEnabled = false; // legacy WebUI DND switch; no longer writes cabin camera bit43
   uint8_t slewPctPerSec = 2;
   uint8_t lowSpeedMaxPctRaw = 240;    // 60% * OFFSET_PCT4_RAW_PER_PCT
 
@@ -234,6 +239,10 @@ static uint8_t normalizeCanBFilterMode(uint8_t mode) {
 static uint8_t normalizeNagKillerMode(uint8_t mode) {
   if (mode == NAG_KILLER_MODE_DOC) return NAG_KILLER_MODE_DOC;
   return mode == NAG_KILLER_MODE_C ? NAG_KILLER_MODE_C : NAG_KILLER_MODE_B;
+}
+
+static uint8_t normalizeFsdActivationProfile(uint8_t profile) {
+  return profile == FSD_PROFILE_V14_HW4 ? FSD_PROFILE_V14_HW4 : FSD_PROFILE_V12_V13;
 }
 
 static uint16_t clampFsdActivationResendMs(uint16_t value) {
@@ -485,6 +494,8 @@ struct RuntimeStatus {
   uint8_t scrollGearInjectOk = 0;
   uint8_t scrollGearInjectBlocked = 0;
   int vehicleSpeedKph = 0;
+  uint8_t hw4FollowDistance = 0;
+  uint8_t hw4DrivingProfile = 255;
 
   int fusedLimitKph = 0;
   int targetSpeedKph = 0;
@@ -1446,6 +1457,17 @@ static uint8_t nagKillerChecksum(const can_frame& frame) {
   return static_cast<uint8_t>((sum + 0x73) & 0xFF);
 }
 
+static uint8_t computeVehicleChecksum(const can_frame& frame, uint8_t checksumByteIndex = 7) {
+  if (checksumByteIndex >= frame.can_dlc) return 0;
+  uint16_t sum = static_cast<uint16_t>(frame.can_id & 0xFF) +
+                 static_cast<uint16_t>((frame.can_id >> 8) & 0xFF);
+  for (uint8_t i = 0; i < frame.can_dlc; ++i) {
+    if (i == checksumByteIndex) continue;
+    sum += frame.data[i];
+  }
+  return static_cast<uint8_t>(sum & 0xFF);
+}
+
 static bool nagKillerApContextFresh(uint32_t now) {
   return nagKillerLastApMs != 0 && (now - nagKillerLastApMs) <= 1000UL;
 }
@@ -1897,6 +1919,11 @@ inline void setSpeedProfileV12V13(can_frame& frame, int profile) {
   frame.data[6] |= (profile << 1);
 }
 
+inline void setSpeedProfileHW4(can_frame& frame, int profile) {
+  frame.data[7] &= static_cast<uint8_t>(~0x70);
+  frame.data[7] |= static_cast<uint8_t>((profile & 0x07) << 4);
+}
+
 inline void setBit(can_frame& frame, int bit, bool value) {
   int byteIndex = bit / 8;
   int bitIndex = bit % 8;
@@ -1953,8 +1980,9 @@ static void serviceFsdActivationResend(const RuntimeConfig& cfg) {
 }
 
 inline int8_t cabinCameraBit43Override(const RuntimeConfig& cfg, uint32_t now) {
+  (void)cfg;
   (void)now;
-  return cfg.cabinCameraDisableEnabled ? 0 : -1;
+  return -1;
 }
 
 inline int clampOffsetKph(int value) { return std::max(std::min(value, MAX_SPEED_OFFSET_KPH), 0); }
@@ -2063,45 +2091,83 @@ struct HW3Handler {
     if (frame.can_id == CAN_ID_FOLLOW_DISTANCE) {
       if (frame.can_dlc < 6) return;
       uint8_t followDistance = (frame.data[5] & 0b11100000) >> 5;
-      // Reuse the 0x3F8 follow-distance setting as the driving style selector.
-      switch (followDistance) {
-        case 1: speedProfile = 2; break;
-        case 2: speedProfile = 1; break;
-        case 3: speedProfile = 0; break;
+      if (normalizeFsdActivationProfile(cfg.fsdActivationProfile) == FSD_PROFILE_V14_HW4) {
+        switch (followDistance) {
+          case 1: speedProfile = 3; break;
+          case 2: speedProfile = 2; break;
+          case 3: speedProfile = 1; break;
+          case 4: speedProfile = 0; break;
+          case 5: speedProfile = 4; break;
+        }
+        g_status.hw4FollowDistance = followDistance;
+        g_status.hw4DrivingProfile = speedProfile;
+      } else {
+        switch (followDistance) {
+          case 1: speedProfile = 2; break;
+          case 2: speedProfile = 1; break;
+          case 3: speedProfile = 0; break;
+        }
       }
       return;
     }
     if (frame.can_id == CAN_ID_AP_CONTROL) {
       if (frame.can_dlc < 8) return;
       auto index = readMuxID(frame);
+      const uint8_t fsdProfile = normalizeFsdActivationProfile(cfg.fsdActivationProfile);
+      const bool fsdProfileV14 = fsdProfile == FSD_PROFILE_V14_HW4;
       if (index == 0 && cfg.canCommsEnabled && cfg.fsdEnabled) {
         setBit(frame, 46, true);
-        // 0x3FD mux 0 enables the FSD/AP bit and writes the current drive style.
-        setSpeedProfileV12V13(frame, speedProfile);
+        if (fsdProfileV14) {
+          setBit(frame, 60, true);
+        } else {
+          setSpeedProfileV12V13(frame, speedProfile);
+        }
         if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
       if (index == 1 && cfg.canCommsEnabled) {
         setBit(frame, 19, false);
+        if (cfg.fsdEnabled && fsdProfileV14) setBit(frame, 47, true);
         const int8_t cabinCameraOverride = cabinCameraBit43Override(cfg, millis());
         if (cabinCameraOverride >= 0) setBit(frame, 43, cabinCameraOverride != 0);
-        // 0x3FD mux 1 keeps bit 19 clear and can optionally clear the cabin camera bit.
+        // 0x3FD mux 1 keeps bit 19 clear; DND no longer changes cabin camera bit43.
         if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
-      if (index == 2 && cfg.canCommsEnabled && cfg.autoSpeedOffsetEnabled) {
-        uint8_t speedOffsetRaw = unifiedSpeedCompensation.hasFusedSpeedLimit
-          ? unifiedSpeedCompensation.speedOffsetRaw
-          : readSpeedOffsetRaw(frame);
-        // 0x3FD mux 2 writes speed offset, or preserves stock offset if no valid limit.
-        speedOffsetRaw = offsetSlewLimiter.apply(speedOffsetRaw, cfg.slewPctPerSec);
-        g_status.offsetRaw = speedOffsetRaw;
-        writeSpeedOffsetRaw(frame, speedOffsetRaw);
-        if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
+      if (index == 2 && cfg.canCommsEnabled) {
+        bool sendMux2 = false;
+        if (cfg.fsdEnabled && fsdProfileV14) {
+          setSpeedProfileHW4(frame, speedProfile);
+          sendMux2 = true;
+        }
+        if (cfg.hw4SpeedOffsetPlus15Enabled) {
+          frame.data[1] = static_cast<uint8_t>((frame.data[1] & ~0x3F) | 21);
+          g_status.offsetRaw = readSpeedOffsetRaw(frame);
+          sendMux2 = true;
+        } else if (cfg.autoSpeedOffsetEnabled) {
+          uint8_t speedOffsetRaw = unifiedSpeedCompensation.hasFusedSpeedLimit
+            ? unifiedSpeedCompensation.speedOffsetRaw
+            : readSpeedOffsetRaw(frame);
+          // 0x3FD mux 2 writes speed offset, or preserves stock offset if no valid limit.
+          speedOffsetRaw = offsetSlewLimiter.apply(speedOffsetRaw, cfg.slewPctPerSec);
+          g_status.offsetRaw = speedOffsetRaw;
+          writeSpeedOffsetRaw(frame, speedOffsetRaw);
+          sendMux2 = true;
+        }
+        if (sendMux2 && twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
     }
   }
 };
 
 HW3Handler handler;
+
+static void handleHw4IsaChimeSuppressFrame(const can_frame& frame, const RuntimeConfig& cfg) {
+  if (!cfg.canCommsEnabled || !cfg.hw4IsaChimeSuppressEnabled) return;
+  if (frame.can_id != CAN_ID_DAS_STATUS || frame.can_dlc < 8) return;
+  can_frame echo = frame;
+  echo.data[1] |= 0x20;
+  echo.data[7] = computeVehicleChecksum(echo);
+  twai_send(echo);
+}
 
 // ============================================================================
 // CAN B (MCP2515) secondary bus -- basic comms + non-blocking service-mode burst
@@ -4153,9 +4219,12 @@ static void handleStatus() {
   j += '{';
   j += "\"canCommsEnabled\":";       j += c.canCommsEnabled ? 1 : 0;
   j += ",\"fsdEnabled\":";           j += c.fsdEnabled ? 1 : 0;
+  j += ",\"fsdActivationProfile\":"; j += normalizeFsdActivationProfile(c.fsdActivationProfile);
   j += ",\"fsdActivationResendEnabled\":"; j += c.fsdActivationResendEnabled ? 1 : 0;
   j += ",\"fsdActivationResendMs\":"; j += c.fsdActivationResendMs;
   j += ",\"autoSpeedOffsetEnabled\":"; j += c.autoSpeedOffsetEnabled ? 1 : 0;
+  j += ",\"hw4SpeedOffsetPlus15Enabled\":"; j += c.hw4SpeedOffsetPlus15Enabled ? 1 : 0;
+  j += ",\"hw4IsaChimeSuppressEnabled\":"; j += c.hw4IsaChimeSuppressEnabled ? 1 : 0;
   j += ",\"cabinCameraDisableEnabled\":"; j += c.cabinCameraDisableEnabled ? 1 : 0;
   j += ",\"slewPctPerSec\":";        j += c.slewPctPerSec;
   j += ",\"lowSpeedMaxPctRaw\":";    j += c.lowSpeedMaxPctRaw;
@@ -4421,6 +4490,8 @@ static void handleStatus() {
   j += ",\"scrollGearInjectOk\":";   j += s.scrollGearInjectOk;
   j += ",\"scrollGearInjectBlocked\":"; j += s.scrollGearInjectBlocked;
   j += ",\"vehicleSpeedKph\":";      j += s.vehicleSpeedKph;
+  j += ",\"hw4FollowDistance\":";    j += s.hw4FollowDistance;
+  j += ",\"hw4DrivingProfile\":";    j += s.hw4DrivingProfile;
   j += ",\"fusedLimitKph\":";        j += s.fusedLimitKph;
   j += ",\"targetSpeedKph\":";       j += s.targetSpeedKph;
   j += ",\"offsetKph\":";            j += s.offsetKph;
@@ -4467,11 +4538,17 @@ static void handleConfig() {
 
   c.canCommsEnabled        = argBool("canCommsEnabled", c.canCommsEnabled);
   c.fsdEnabled              = argBool("fsdEnabled", c.fsdEnabled);
+  c.fsdActivationProfile    = normalizeFsdActivationProfile(
+      static_cast<uint8_t>(argU16("fsdActivationProfile", c.fsdActivationProfile)));
   c.fsdActivationResendEnabled =
       argBool("fsdActivationResendEnabled", c.fsdActivationResendEnabled);
   c.fsdActivationResendMs =
       clampFsdActivationResendMs(argU16("fsdActivationResendMs", c.fsdActivationResendMs));
   c.autoSpeedOffsetEnabled  = argBool("autoSpeedOffsetEnabled", c.autoSpeedOffsetEnabled);
+  c.hw4SpeedOffsetPlus15Enabled =
+      argBool("hw4SpeedOffsetPlus15Enabled", c.hw4SpeedOffsetPlus15Enabled);
+  c.hw4IsaChimeSuppressEnabled =
+      argBool("hw4IsaChimeSuppressEnabled", c.hw4IsaChimeSuppressEnabled);
   c.cabinCameraDisableEnabled = argBool("cabinCameraDisableEnabled", c.cabinCameraDisableEnabled);
   c.slewPctPerSec           = static_cast<uint8_t>(argU16("slewPctPerSec", c.slewPctPerSec));
   c.lowSpeedMaxPctRaw       = static_cast<uint8_t>(argU16("lowSpeedMaxPctRaw", c.lowSpeedMaxPctRaw));
@@ -4719,9 +4796,12 @@ static void loadConfigFromPrefs() {
   RuntimeConfig c;  // defaults
   c.canCommsEnabled       = prefs.getBool("canComms", c.canCommsEnabled);
   c.fsdEnabled             = prefs.getBool("fsdEnabled", c.fsdEnabled);
+  c.fsdActivationProfile   = normalizeFsdActivationProfile(prefs.getUChar("fsdProf", c.fsdActivationProfile));
   c.fsdActivationResendEnabled = prefs.getBool("fsdReOn", c.fsdActivationResendEnabled);
   c.fsdActivationResendMs  = clampFsdActivationResendMs(prefs.getUShort("fsdReMs", c.fsdActivationResendMs));
   c.autoSpeedOffsetEnabled = prefs.getBool("autoOffset", c.autoSpeedOffsetEnabled);
+  c.hw4SpeedOffsetPlus15Enabled = prefs.getBool("hw4Sp15", c.hw4SpeedOffsetPlus15Enabled);
+  c.hw4IsaChimeSuppressEnabled = prefs.getBool("hw4Isa", c.hw4IsaChimeSuppressEnabled);
   c.cabinCameraDisableEnabled = prefs.getBool("cabCamOff", c.cabinCameraDisableEnabled);
   c.slewPctPerSec          = prefs.getUChar("slewPct", c.slewPctPerSec);
   c.lowSpeedMaxPctRaw      = prefs.getUChar("lowRaw", c.lowSpeedMaxPctRaw);
@@ -4772,9 +4852,12 @@ static void saveConfigToPrefs() {
   prefs.begin("t2can", false);
   prefs.putBool("canComms", c.canCommsEnabled);
   prefs.putBool("fsdEnabled", c.fsdEnabled);
+  prefs.putUChar("fsdProf", normalizeFsdActivationProfile(c.fsdActivationProfile));
   prefs.putBool("fsdReOn", c.fsdActivationResendEnabled);
   prefs.putUShort("fsdReMs", clampFsdActivationResendMs(c.fsdActivationResendMs));
   prefs.putBool("autoOffset", c.autoSpeedOffsetEnabled);
+  prefs.putBool("hw4Sp15", c.hw4SpeedOffsetPlus15Enabled);
+  prefs.putBool("hw4Isa", c.hw4IsaChimeSuppressEnabled);
   prefs.putBool("cabCamOff", c.cabinCameraDisableEnabled);
   prefs.putUChar("slewPct", c.slewPctPerSec);
   prefs.putUChar("lowRaw", c.lowSpeedMaxPctRaw);
@@ -5012,6 +5095,7 @@ static void handleTwaiFrame(can_frame& frame, const RuntimeConfig& cfg) {
   handleNagKillerContextFrame(frame, cfg);
   handleDasCarLogFrame(frame);
   handleAutoShiftDiagFrame(frame);
+  handleHw4IsaChimeSuppressFrame(frame, cfg);
 #ifdef ENABLE_CANB_MCP2515
   handleDndHandsOnFrame(frame);
 #endif

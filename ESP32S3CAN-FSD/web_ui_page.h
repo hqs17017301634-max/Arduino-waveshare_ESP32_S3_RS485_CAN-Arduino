@@ -66,6 +66,8 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 <label>FSD 启用<input type="checkbox" id="fsdEnabled"></label>
 <label>FSD 激活帧补发<input type="checkbox" id="fsdActivationResendEnabled"></label>
 <label>自动速度偏移<input type="checkbox" id="autoSpeedOffsetEnabled"></label>
+<label>HW4 速度偏移 +15<input type="checkbox" id="hw4SpeedOffsetPlus15Enabled"></label>
+<label>HW4 ISA 提示静音<input type="checkbox" id="hw4IsaChimeSuppressEnabled"></label>
 <label>免打扰<input type="checkbox" id="cabinCameraDisableEnabled"></label>
 <label>高光爆闪启用<input type="checkbox" id="highBeamStrobeEnabled"></label>
 <label>后雾灯刹车爆闪启用<input type="checkbox" id="rearFogBrakeStrobeEnabled"></label>
@@ -76,6 +78,8 @@ button,.linkbtn{min-height:40px;background:var(--btn);color:#fff;border:1px soli
 
 <div class="card">
 <h2>FSD / 速度参数</h2>
+<label>FSD 激活车型<select id="fsdActivationProfile"><option value="0">V12/V13 / HW3</option><option value="1">V14 / HW4</option></select></label>
+<div class="kv" id="hw4ProfileRow" style="display:none"><span>跟车距离 / 驾驶模式</span><span><b id="hw4FollowDistanceText">-</b> / <b id="hw4DrivingProfileText">-</b></span></div>
 <label>补发周期 ms<input type="number" id="fsdActivationResendMs" min="1" max="1000" step="1"></label>
 <div class="kv"><span>补发状态 / 周期</span><span><b id="fsdActivationResendActive">-</b> / <b id="fsdActivationResendPeriodMs">-</b></span></div>
 <div class="kv"><span>补发次数 / mux0缓存</span><span><b id="fsdActivationResendTxCount">-</b> / <b id="fsdActivationResendCachedMuxMask">-</b></span></div>
@@ -240,7 +244,7 @@ function applyTheme(t){document.documentElement.setAttribute("data-theme",t);con
 function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";const next=cur==="light"?"dark":"light";applyTheme(next);setStoredTheme(next)}
 applyTheme(preferredTheme());
 function closeLegalNotice(){const e=document.getElementById("legalNotice");if(e)e.classList.add("hidden")}
-const cfgIds=["canCommsEnabled","fsdEnabled","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","can1ReceiveOnly"];
+const cfgIds=["canCommsEnabled","fsdEnabled","fsdActivationProfile","fsdActivationResendEnabled","fsdActivationResendMs","autoSpeedOffsetEnabled","hw4SpeedOffsetPlus15Enabled","hw4IsaChimeSuppressEnabled","cabinCameraDisableEnabled","slewPctPerSec","lowSpeedMaxPctRaw","targetBelow60","target60","target70","target80","target90","target100","target120","canbEnabled","canbServiceModeEnabled","canbFilterMode","highBeamStrobeEnabled","rearFogBrakeStrobeEnabled","reverseStrobeEnabled","batteryPreheatEnabled","can1ReceiveOnly"];
 const statIds={nagKillerMode:"nagKillerModeText"};
 function setVal(id,v){const e=document.getElementById(id);if(!e)return;if(e.type==="checkbox")e.checked=!!v;else if(id==="lowSpeedMaxPctRaw")e.value=Math.max(0,Math.min(60,Number(v||0)/4)).toFixed(2);else e.value=v;}
 function getVal(e){if(e.type==="checkbox")return e.checked?1:0;if(e.id==="lowSpeedMaxPctRaw")return Math.max(0,Math.min(240,Math.round((Number(e.value)||0)*4)));return e.value}
@@ -480,8 +484,10 @@ if(bad.length){e.textContent="不满足："+bad.slice(0,6).join("；")+(bad.leng
 else if(warn.length){e.textContent="未完整："+warn.slice(0,6).join("；")+(warn.length>6?"；…":"");e.style.color="#ffd479"}
 else{e.textContent="通过：核心自动换挡链路未发现阻断";e.style.color="#9f9"}
 }
+function hw4DrivingProfileText(v){return ["0 Chill","1 Normal","2 Hurry","3 Max","4 Sloth"][Number(v)]||"-"}
+function updateHw4Profile(j){const row=document.getElementById("hw4ProfileRow"),fd=document.getElementById("hw4FollowDistanceText"),pf=document.getElementById("hw4DrivingProfileText");if(!row||!fd||!pf)return;const isV14=Number(j.fsdActivationProfile)===1;row.style.display=isV14?"":"none";if(!isV14)return;const d=Number(j.hw4FollowDistance||0);fd.textContent=d>0?String(d):"-";pf.textContent=hw4DrivingProfileText(j.hw4DrivingProfile)}
 function updateStats(j){Object.keys(j).forEach(k=>{const e=document.getElementById(statIds[k]||k);if(e&&e.tagName!=="INPUT"&&e.tagName!=="SELECT")e.textContent=fmtStat(k,j[k])})}
-function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateAutoShiftDiag(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
+function pollStatus(){fetch("/status").then(r=>r.json()).then(j=>{updateStats(j);updateHw4Profile(j);updateAutoShiftDiag(j);updateAutoDiag(j);if(!loaded){cfgIds.forEach(k=>{if(k in j)setVal(k,j[k])});loaded=true}}).catch(()=>{})}
 function setPolling(on){if(on&&!pollTimer){pollStatus();pollTimer=setInterval(pollStatus,1000)}if(!on&&pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function body(){const p=new URLSearchParams();cfgIds.forEach(k=>{const e=document.getElementById(k);if(e)p.set(k,getVal(e))});return p}
 function scheduleAutoSave(){if(!loaded)return;clearTimeout(autoSaveTimer);showResult("正在自动保存...");autoSaveTimer=setTimeout(saveConfig,700)}
