@@ -196,7 +196,7 @@ struct RuntimeConfig {
   bool hw4IsaChimeSuppressEnabled = false;  // 0x399: data[1] |= 0x20 + vehicle checksum
   uint8_t hw4DrivingProfileSetting = 2;     // 0=Chill, 1=Normal, 2=Hurry, 3=Max, 4=Sloth
   bool enhancedAutopilotEnabled = false;    // 0x3FD mux1 bit19=0; HW4 additionally bit47=1
-  bool cabinCameraDisableEnabled = false; // legacy WebUI DND switch; no longer writes cabin camera bit43
+  bool cabinCameraDisableEnabled = false; // DND; V12/V13 also clears cabin camera bit43
   uint8_t slewPctPerSec = 2;
   uint8_t lowSpeedMaxPctRaw = 240;    // 60% * OFFSET_PCT4_RAW_PER_PCT
 
@@ -2014,9 +2014,10 @@ static void serviceFsdActivationResend(const RuntimeConfig& cfg) {
 }
 
 inline int8_t cabinCameraBit43Override(const RuntimeConfig& cfg, uint32_t now) {
-  (void)cfg;
   (void)now;
-  return -1;
+  const bool fsdProfileV14 =
+      normalizeFsdActivationProfile(cfg.fsdActivationProfile) == FSD_PROFILE_V14_HW4;
+  return cfg.cabinCameraDisableEnabled && !fsdProfileV14 ? 0 : -1;
 }
 
 inline int clampOffsetKph(int value) { return std::max(std::min(value, MAX_SPEED_OFFSET_KPH), 0); }
@@ -2236,13 +2237,19 @@ struct HW3Handler {
         }
         if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
-      if (index == 1 && cfg.canCommsEnabled && cfg.enhancedAutopilotEnabled) {
-        setBit(frame, 19, false);
-        if (fsdProfileV14) setBit(frame, 47, true);
+      if (index == 1 && cfg.canCommsEnabled) {
+        bool modified = false;
+        if (cfg.enhancedAutopilotEnabled) {
+          setBit(frame, 19, false);
+          if (fsdProfileV14) setBit(frame, 47, true);
+          modified = true;
+        }
         const int8_t cabinCameraOverride = cabinCameraBit43Override(cfg, millis());
-        if (cabinCameraOverride >= 0) setBit(frame, 43, cabinCameraOverride != 0);
-        // Enhanced Autopilot is independent from the mux0 FSD activation switch.
-        if (twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
+        if (cabinCameraOverride >= 0) {
+          setBit(frame, 43, cabinCameraOverride != 0);
+          modified = true;
+        }
+        if (modified && twai_send(frame)) cacheFsdActivationResendFrame(frame, index, cfg);
       }
       if (index == 2 && cfg.canCommsEnabled) {
         bool sendMux2 = false;
