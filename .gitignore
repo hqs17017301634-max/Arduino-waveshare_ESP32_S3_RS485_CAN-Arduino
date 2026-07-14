@@ -1,22 +1,26 @@
-# Arduino/RP2040/ESP32 build artifacts
+# PlatformIO and generated firmware
+.pio/
+.pio-core/
+outputs/
 build/
-*.elf
 *.bin
-*.uf2
+*.elf
 *.map
 *.hex
-*.eep
-*.lst
+*.uf2
 *.o
 *.d
+sdkconfig.lilygo_*
 
-# Local archives/backups
+# Local editor and OS files
+.vscode/
+.idea/
+.cursor/
+.claude/
+.DS_Store
+Thumbs.db
+
+# Local archives
 *.zip
 *.7z
 *.rar
-
-# OS/editor files
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
